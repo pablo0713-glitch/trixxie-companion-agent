@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+
+from config.settings import Settings
+from core.agent import AgentCore
+from core.persona import MessageContext
+from interfaces.sl_bridge.formatters import cap_reply
+from interfaces.sl_bridge.sensor_store import SensorStore
+from memory.location_store import LocationStore
+
+logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------ payloads
+
+class SLInboundPayload(BaseModel):
+    user_id: str
+    display_name: str
+    message: str
+    region: str
+    channel: int = 0
+    timestamp: int = 0
+    nearby_chat: list[str] = []
+
+
+class SLSensorPayload(BaseModel):
+    type: str           # avatars | environment | objects | clothing | chat
+    region: str
+    data: Any           # varies by type
+    user_id: str = ""
+
+
+class SLOutboundResponse(BaseModel):
+    reply: str
+    actions: list[dict] = []
+
+
+# ------------------------------------------------------------------ app factory
+
+def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStore, location_store: LocationStore | None = None) -> FastAPI:
+    app = FastAPI(title="Trixxie SL Bridge", docs_url=None, redoc_url=None)
+
+    # ---- Conversation endpoint ----
+
+    @app.post("/sl/message", response_model=SLOutboundResponse)
+    async def sl_message(request: Request, payload: SLInboundPayload) -> SLOutboundResponse:
+        secret = request.headers.get("X-SL-Secret", "")
+        if settings.sl_bridge_secret and secret != settings.sl_bridge_secret:
+            logger.warning("SL bridge: invalid secret from %s", payload.user_id)
+            return SLOutboundResponse(reply="Authentication failed.", actions=[])
+
+        sensor_ctx = sensor_store.get_snapshot(payload.region)
+
+        sl_user_id = f"sl_{payload.user_id}"
+        recent_locations: list[dict] = []
+        if location_store:
+            recent_locations = await location_store.get_recent_visits(sl_user_id, limit=10)
+
+        context = MessageContext(
+            platform="sl",
+            user_id=sl_user_id,
+            channel_id=f"sl_{payload.channel}",
+            display_name=payload.display_name,
+            sl_region=payload.region,
+            sl_nearby_chat=payload.nearby_chat,
+            sl_sensor_context=sensor_ctx,
+            sl_recent_locations=recent_locations,
+        )
+
+        try:
+            result = await agent.handle_message(payload.message, context)
+        except Exception as exc:
+            logger.exception("SL bridge error: %s", exc)
+            return SLOutboundResponse(
+                reply="Something went sideways. Try again in a moment.",
+                actions=[],
+            )
+
+        return SLOutboundResponse(
+            reply=cap_reply(result.text),
+            actions=result.sl_actions[:5],
+        )
+
+    # ---- Sensor endpoint ----
+
+    @app.post("/sl/sensor")
+    async def sl_sensor(request: Request, payload: SLSensorPayload) -> dict:
+        secret = request.headers.get("X-SL-Secret", "")
+        if settings.sl_bridge_secret and secret != settings.sl_bridge_secret:
+            return {"status": "unauthorized"}
+
+        sensor_store.update(payload.region, payload.type, payload.data)
+        logger.debug("Sensor update: type=%s region=%s", payload.type, payload.region)
+
+        if payload.type == "environment" and location_store and payload.user_id:
+            data = payload.data if isinstance(payload.data, dict) else {}
+            parcel = data.get("parcel", "")
+            parcel_desc = data.get("parcel_desc", "")
+            region = data.get("region", payload.region)
+            if parcel:
+                sl_user_id = f"sl_{payload.user_id}"
+                is_new = await location_store.record_visit(sl_user_id, region, parcel, parcel_desc)
+                if is_new:
+                    logger.debug("Location recorded: %s / %s for %s", region, parcel, sl_user_id)
+
+        return {"status": "ok"}
+
+    # ---- Health ----
+
+    @app.get("/health")
+    async def health() -> dict:
+        return {"status": "ok", "name": "trixxie-sl-bridge"}
+
+    return app

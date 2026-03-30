@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+from typing import Any
+
+from config.settings import Settings
+from core.persona import MessageContext
+from core.tool_handlers import notes, sl_action, web_search
+
+
+# ------------------------------------------------------------------ schemas
+
+WEB_SEARCH_SCHEMA = {
+    "name": "web_search",
+    "description": (
+        "Search the web for current information, news, facts, shopping links, "
+        "SL sim details, music lookups, or anything where freshness matters. "
+        "Returns titles, snippets, and URLs. Do not announce you're searching — "
+        "incorporate results naturally."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Targeted search query phrased as a web search, not a question.",
+            },
+            "num_results": {
+                "type": "integer",
+                "description": "Number of results to return. Default 5, max 10.",
+                "default": 5,
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+SL_ACTION_SCHEMA = {
+    "name": "sl_action",
+    "description": (
+        "Send a private command to your Second Life presence. "
+        "Only available in Second Life — do not call this on Discord. "
+        "Actions are queued and executed after your reply is sent. "
+        "All output is private IM to StonedGrits — nothing goes to public chat."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action_type": {
+                "type": "string",
+                "enum": ["im", "emote", "anim_trigger"],
+                "description": (
+                    "'im' = send a private instant message. "
+                    "'emote' = send *text* as a private IM (seen only by StonedGrits). "
+                    "'anim_trigger' = play a named animation on your avatar."
+                ),
+            },
+            "text": {
+                "type": "string",
+                "description": "The text to send, or animation name for anim_trigger. Max 1023 chars.",
+            },
+            "target_key": {
+                "type": "string",
+                "description": "Optional avatar UUID. Defaults to StonedGrits.",
+            },
+        },
+        "required": ["action_type", "text"],
+    },
+}
+
+NOTE_WRITE_SCHEMA = {
+    "name": "note_write",
+    "description": (
+        "Save a persistent note for the current user. Survives across conversations. "
+        "Use for places they like, goals, shopping lists, reminders — anything worth keeping. "
+        "Overwrites if a note with this title already exists."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {
+                "type": "string",
+                "description": "Short unique identifier. Examples: 'favorite_sims', 'creative_goals', 'sl_stores'.",
+            },
+            "content": {"type": "string", "description": "Note content. Plain text, can be multi-line."},
+        },
+        "required": ["title", "content"],
+    },
+}
+
+NOTE_READ_SCHEMA = {
+    "name": "note_read",
+    "description": "Read a previously saved note by title.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "Exact title of the note to retrieve."}
+        },
+        "required": ["title"],
+    },
+}
+
+NOTE_LIST_SCHEMA = {
+    "name": "note_list",
+    "description": "List all saved note titles for the current user. Use before note_read if unsure of the exact title.",
+    "input_schema": {"type": "object", "properties": {}, "required": []},
+}
+
+
+# ------------------------------------------------------------------ registry
+
+class ToolRegistry:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    def get_definitions(self, context: MessageContext) -> list[dict]:
+        """Return tool schemas appropriate for this context/platform."""
+        tools = [WEB_SEARCH_SCHEMA, NOTE_WRITE_SCHEMA, NOTE_READ_SCHEMA, NOTE_LIST_SCHEMA]
+        if context.platform == "sl":
+            tools.append(SL_ACTION_SCHEMA)
+        return tools
+
+    async def dispatch(
+        self,
+        name: str,
+        tool_input: dict[str, Any],
+        context: MessageContext,
+        action_queue: list[dict],
+    ) -> str:
+        if name == "web_search":
+            return await web_search.handle_web_search(
+                tool_input,
+                context,
+                self._settings.search_provider,
+                self._settings.search_api_key,
+            )
+        elif name == "sl_action":
+            return await sl_action.handle_sl_action(tool_input, context, action_queue)
+        elif name == "note_write":
+            return await notes.handle_note_write(tool_input, context, self._settings.notes_dir)
+        elif name == "note_read":
+            return await notes.handle_note_read(tool_input, context, self._settings.notes_dir)
+        elif name == "note_list":
+            return await notes.handle_note_list(tool_input, context, self._settings.notes_dir)
+        else:
+            return f"Unknown tool: {name}"
