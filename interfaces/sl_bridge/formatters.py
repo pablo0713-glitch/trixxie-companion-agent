@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 SL_CHAT_LIMIT = 1023
-REPLY_HARD_CAP = 4000   # LSL send_chunked splits this into multiple IMs (≤1000 chars each)
+REPLY_HARD_CAP = 4000      # SL: LSL send_chunked splits this into multiple IMs (≤1000 chars each)
+OPENSIM_REPLY_CAP = 1800   # OpenSim: default llHTTPRequest response body limit is 2048 bytes
 
 # Unicode → ASCII replacements for SL compatibility
 _UNICODE_MAP = str.maketrans({
@@ -32,10 +33,13 @@ def trim_for_sl(text: str) -> str:
     return cutoff[:SL_CHAT_LIMIT - 3] + "..."
 
 
-def cap_reply(text: str) -> str:
-    """Normalize Unicode and apply a hard cap. Chunking into multiple IMs is
-    handled on the LSL side by send_chunked(), so we do not trim to SL_CHAT_LIMIT here."""
+def cap_reply(text: str, grid: str = "sl") -> str:
+    """Normalize Unicode and apply a grid-aware hard cap.
+    OpenSim's default llHTTPRequest response body limit is 2048 bytes, so replies
+    are capped at 1800 chars to leave room for the JSON envelope.
+    SL chunking (send_chunked in LSL) handles splitting for longer SL replies."""
     text = text.translate(_UNICODE_MAP)
-    if len(text) > REPLY_HARD_CAP:
-        text = text[:REPLY_HARD_CAP]
+    cap = OPENSIM_REPLY_CAP if grid == "opensim" else REPLY_HARD_CAP
+    if len(text) > cap:
+        text = text[:cap]
     return text

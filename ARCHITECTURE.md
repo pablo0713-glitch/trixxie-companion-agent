@@ -17,16 +17,17 @@ Trixxie is a stateful AI agent built around a single shared core (`AgentCore`) t
      │   @mention / DM     │  │   POST /sl/message     │
      │   → AgentCore       │  │   ← JSON reply         │
      │   ← chunked reply   │  │                        │
-     └─────────────────────┘  └────────────┬───────────┘
-                                            │ llHTTPRequest
-                               ┌────────────▼───────────┐
-                               │   LSL HUD               │
-                               │   (worn by Trixxie)     │
-                               │                         │
-                               │   /42 message → POST    │
-                               │   sensor data → POST    │
-                               │   reply → llIM(avatar)  │
-                               └─────────────────────────┘
+     └─────────────────────┘  └──────┬──────────┬──────┘
+                                     │          │
+                          PostHTTP   │          │ llHTTPRequest
+                   ┌─────────────────▼──┐  ┌───▼────────────────┐
+                   │  Cool VL Viewer     │  │  LSL HUD            │
+                   │  automation.lua     │  │  (worn by Trixxie)  │
+                   │                     │  │                     │
+                   │  private IM → POST  │  │  /42 msg → POST     │
+                   │  typing indicator   │  │  sensor data → POST │
+                   │  reply → SendIM     │  │  reply → llIM       │
+                   └─────────────────────┘  └─────────────────────┘
 ```
 
 Both interfaces share the same `AgentCore`, `FileMemoryStore`, and `LocationStore`. A `PersonMap` links platform-specific user IDs to a canonical person identity so that conversations on either platform inform the same memory context.
@@ -127,6 +128,15 @@ lsl/
                                           Listens on channel 42 for conversation.
                                           POSTs to /sl/message, receives JSON reply,
                                           delivers response via llInstantMessage.
+
+lua/
+  trixxie_companion.lua                   Cool VL Viewer automation script.
+                                          Copy to user_settings/automation.lua.
+                                          OnInstantMsg → PostHTTP → OnHTTPReply → SendIM.
+                                          SetAgentTyping wraps inference for typing indicator.
+                                          OnReceivedChat feeds ambient chat buffer.
+                                          Replaces the /42 conversation path; sensor HUD
+                                          remains required for environmental context.
 ```
 
 ---
@@ -248,12 +258,14 @@ Deduplication key: `"{region}\x00{parcel}"` — the null byte ensures region and
 
 ## Second Life Communication Flow
 
+### Via LSL HUD (channel 42)
+
 ```
 StonedGrits types: /42 hey what do you think of this sim?
         │
         ▼
 Trixxie's HUD (LSL, channel 42 listener)
-        │  llHTTPRequest POST /sl/message
+        │  llHTTPRequest POST /sl/message  [X-SL-Secret header]
         ▼
 cloudflared tunnel  →  FastAPI bridge (localhost:8080)
         │
@@ -276,21 +288,55 @@ LSL HUD receives http_response
 Private IM arrives in StonedGrits' chat window
 ```
 
-Sensor data travels a separate path — the HUD POSTs to `/sl/sensor` on a timer and on location changes. The `/sl/message` endpoint reads the latest snapshot from `SensorStore` at request time.
+### Via Cool VL Viewer Lua (direct IM)
+
+```
+StonedGrits sends a private IM to Trixxie's avatar
+        │
+        ▼
+automation.lua — OnInstantMsg(session_id, origin_id, type=0, ...)
+        │  SetAgentTyping(true)   ← typing indicator appears
+        │  PostHTTP POST /sl/message  [secret in body]
+        ▼
+cloudflared tunnel  →  FastAPI bridge (localhost:8080)
+        │
+        ├── SensorStore.get_snapshot(region)       ← latest sensor data (from HUD)
+        ├── LocationStore.get_recent_visits(uid)   ← SL visit history
+        │
+        ▼
+AgentCore.handle_message()
+        ▼
+Claude API  →  reply text
+        │
+        ▼
+FastAPI returns JSON: { "reply": "...", "actions": [...] }
+        │
+        ▼
+automation.lua — OnHTTPReply(handle, success, reply)
+        │  SetAgentTyping(false)  ← typing indicator clears
+        │  SendIM(session_id, chunk) × N
+        ▼
+Reply arrives in StonedGrits' IM window — no /42 required
+```
+
+Sensor data travels a separate path in both cases — the HUD POSTs to `/sl/sensor` on a timer and on location changes. The `/sl/message` endpoint reads the latest snapshot from `SensorStore` at request time.
 
 ---
 
 ## Platform Differences
 
-| Concern | Discord | Second Life |
-|---|---|---|
-| Input | @mention or DM | `/42 message` → LSL HUD → HTTP bridge |
-| Output | `channel.send()`, chunked ≤2,000 chars | `llInstantMessage`, capped ≤1,023 chars |
-| Unicode | Markdown supported | Normalized to ASCII (smart quotes → straight) |
-| `sl_action` tool | Not available | Available — queued, sent after reply |
-| Sensor context | Not available | Avatar list, environment, nearby objects |
-| Location history | Not available | Recent 10 parcels injected into prompt |
-| User ID prefix | `discord_` | `sl_` |
+| Concern | Discord | SL — LSL HUD | SL — Lua script |
+|---|---|---|---|
+| Input trigger | @mention, DM, or active channel | `/42 message` in local chat | Private IM to avatar |
+| Output delivery | `channel.send()`, chunked ≤2,000 chars | `llInstantMessage`, chunked ≤1,000 chars | `SendIM`, chunked ≤1,000 chars |
+| Typing indicator | No | No | Yes — `SetAgentTyping` |
+| Auth mechanism | N/A | `X-SL-Secret` HTTP header | `secret` field in JSON body |
+| Unicode | Markdown supported | Normalized to ASCII | Normalized to ASCII |
+| `sl_action` tool | Not available | Available — queued, sent after reply | Available — queued, sent after reply |
+| Sensor context | Not available | Full (avatars, env, objects, clothing) | From HUD snapshots (HUD still required) |
+| Location history | Not available | Recent 10 parcels injected into prompt | Recent 10 parcels injected into prompt |
+| User ID prefix | `discord_` | `sl_` | `sl_` |
+| Active channel config | `DISCORD_ACTIVE_CHANNEL_IDS` in `.env` | N/A | N/A |
 
 `MessageContext.platform` is the single field that drives all of these differences. The core agent has no platform-specific logic.
 
@@ -324,7 +370,7 @@ All three services share the same `AgentCore`, `FileMemoryStore`, and `LocationS
 
 | Constraint | Detail |
 |---|---|
-| SL direct IMs | LSL cannot intercept IMs sent directly to an avatar. Channel 42 is the interaction mechanism. |
+| SL direct IMs (LSL path) | LSL cannot intercept IMs sent directly to an avatar. Channel 42 is the interaction mechanism for the LSL HUD. The Cool VL Viewer Lua script solves this — it uses `OnInstantMsg` to receive private IMs natively. |
 | Tunnel URL changes | Free cloudflared tunnels get a new URL on each restart. A named tunnel (paid or self-hosted) gives a permanent URL and avoids updating the LSL script. |
 | Avatar scan cap | Avatar list is capped at 25 nearest to prevent Stack-Heap Collision in crowded sims (up to 100 avatars). |
 | Consolidation is person-wide | Trimming conversation files to 10 turns affects all platforms for that person simultaneously. |
@@ -335,6 +381,7 @@ All three services share the same `AgentCore`, `FileMemoryStore`, and `LocationS
 
 | Area | Notes |
 |---|---|
+| Radegast C# plugin | Native IM loop for Radegast viewer — same `/sl/message` endpoint; requires C# build pipeline |
 | Memory upgrade | Swap `FileMemoryStore` → `ChromaMemoryStore` in `main.py` — `AbstractMemoryStore` is the only contract `AgentCore` depends on |
 | Named tunnel | Permanent subdomain so the LSL `SERVER_URL` never needs updating |
 | More tools | Register a new handler in `ToolRegistry` and add a schema in `tools.py` |

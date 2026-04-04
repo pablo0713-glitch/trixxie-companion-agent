@@ -203,7 +203,6 @@ Every `llHTTPRequest` returns a key used to correlate the response in `http_resp
 | `sk_env` | Environment scan post |
 | `sk_obj` | Object proximity post |
 | `sk_clo` | Clothing scan post |
-| `sk_chat` | Chat forward post |
 | `reply_http` | Active channel-42 conversation request |
 
 Sensor keys (`sk_*`) are fire-and-forget — responses are discarded immediately. Only `reply_http` drives visible output. While `reply_http` is non-null, new channel-42 messages are rejected with `*still thinking...*`.
@@ -216,17 +215,7 @@ Channel 0 messages are always appended to `nearby_chat` (up to `CHAT_BUF_SIZE = 
 
 `persona.py` consumes exactly 10 lines (`sl_nearby_chat[-10:]`) — the HUD buffer and the server-side slice are intentionally kept in sync. Changing one requires changing the other.
 
-Separate from buffering, the chat *sensor* (`s_chat`) controls whether individual messages are also forwarded to `/sl/sensor` in real time.
-
-**Chat filter logic:**
-
-| `chat_filter` | `is_object` | Forwarded? |
-|---|---|---|
-| 0 (DJ/Objects) | true | Yes |
-| 0 (DJ/Objects) | false | No |
-| 1 (All Chat) | either | Yes |
-
-`is_object` is true when `llGetAgentSize(id) == ZERO_VECTOR` — i.e. the speaker has no avatar dimensions and is therefore a scripted object or bot.
+The `s_chat` toggle controls whether channel 0 messages are buffered at all. When `s_chat` is FALSE, `nearby_chat` stays empty and no ambient context is attached to `/42` messages.
 
 ---
 
@@ -242,5 +231,55 @@ Separate from buffering, the chat *sensor* (`s_chat`) controls whether individua
 | `do_clothing_scan()` | Triggers `llSensor` AGENT sweep for scan_mode 1 |
 | `process_clothing_hits(num)` | scan_mode 2 handler — filters attachments, posts `clothing` |
 | `process_object_hits(num)` | scan_mode 3 handler — collects objects, posts `objects` |
+| `send_chunked(target, text)` | Splits reply at sentence boundaries, delivers as successive IMs (≤1000 chars each) |
 | `show_menu()` | Displays the HUD control dialog |
 | `show_status()` | Prints sensor state to owner chat |
+
+---
+
+## OpenSimulator Compatibility
+
+The HUD script is compatible with OpenSimulator (0.9.3.0+, YEngine) with one configuration change and one server-side consideration.
+
+### Configuration
+
+Set `GRID = "opensim"` at the top of the script (default is `"sl"`):
+
+```lsl
+string  GRID = "opensim";
+```
+
+This value is sent with every `/sl/message` POST. The server uses it to apply a tighter reply cap appropriate for OpenSim's HTTP response body limits.
+
+### LSL Function Compatibility
+
+All functions used in this script are supported in current OpenSim:
+
+| Function | OpenSim Status |
+|---|---|
+| `llHTTPRequest` / `http_response` | Supported — fire-and-forget sensor posts and reply flow both work |
+| `llGetAgentList(AGENT_LIST_REGION, [])` | Supported — same return format as SL |
+| `llGetObjectDetails` | Supported — all object constants used here are implemented |
+| `llGetParcelDetails` | Supported — `PARCEL_DETAILS_NAME` and `PARCEL_DETAILS_DESC` both work |
+| `llReplaceSubString` | Added to OpenSim in Jan 2023 — available in all current versions |
+| `llJsonGetValue` / `JSON_INVALID` | Supported in YEngine (required for OpenSim 0.9.3+) |
+| `llInstantMessage` | Supported — same 1023-char truncation; `send_chunked()` handles this |
+| `llDialog`, `llListen`, `llSensor` | Fully supported |
+| `llGetEnv("time_of_day")`, `llGetEnv("sun_altitude")` | Supported — values may differ if region uses EEP environment |
+| `HTTP_CUSTOM_HEADER` (`X-SL-Secret`) | Supported — custom headers work identically |
+| `HTTP_VERIFY_CERT` | Accepted — behavior depends on admin config; cloudflared tunnel (valid HTTPS cert) works fine |
+
+### HTTP Response Body Limit
+
+OpenSim's default `llHTTPRequest` response body limit is **2048 bytes** (vs SL's 16384). Setting `GRID = "opensim"` causes the server to cap reply text at **1800 chars**, keeping the total JSON response comfortably under 2048 bytes.
+
+Alternatively, an OpenSim administrator can raise the limit in `OpenSim.ini`:
+```ini
+[Network]
+    HttpBodyMaxLenMAX = 16384
+```
+With this setting, longer replies work and the `GRID` variable has no practical effect on reply length.
+
+### Tunnel Requirement
+
+The SL HTTP bridge must be reachable via a valid HTTPS URL. Cloudflared provides this for both SL and OpenSim. OpenSim's `HTTP_VERIFY_CERT = TRUE` behavior depends on the server's certificate configuration — a proper CA-signed certificate (as cloudflared provides) works without any OpenSim.ini changes.

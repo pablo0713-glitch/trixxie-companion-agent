@@ -26,6 +26,8 @@ class SLInboundPayload(BaseModel):
     channel: int = 0
     timestamp: int = 0
     nearby_chat: list[str] = []
+    grid: str = "sl"   # "sl" or "opensim" — controls reply size cap
+    secret: str = ""   # body-based auth for clients that cannot send custom headers (e.g. Lua PostHTTP)
 
 
 class SLSensorPayload(BaseModel):
@@ -49,7 +51,9 @@ def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStor
 
     @app.post("/sl/message", response_model=SLOutboundResponse)
     async def sl_message(request: Request, payload: SLInboundPayload) -> SLOutboundResponse:
-        secret = request.headers.get("X-SL-Secret", "")
+        # Accept secret from X-SL-Secret header (LSL HUD) or request body (Lua PostHTTP).
+        header_secret = request.headers.get("X-SL-Secret", "")
+        secret = header_secret or payload.secret
         if settings.sl_bridge_secret and secret != settings.sl_bridge_secret:
             logger.warning("SL bridge: invalid secret from %s", payload.user_id)
             return SLOutboundResponse(reply="Authentication failed.", actions=[])
@@ -82,7 +86,7 @@ def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStor
             )
 
         return SLOutboundResponse(
-            reply=cap_reply(result.text),
+            reply=cap_reply(result.text, grid=payload.grid),
             actions=result.sl_actions[:5],
         )
 

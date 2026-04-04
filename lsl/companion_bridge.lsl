@@ -12,8 +12,9 @@
 // ================================================================
 
 // --- Config ---
-string  SERVER_URL     = "https://paid-initiatives-manufacturers-rights.trycloudflare.com";
+string  SERVER_URL     = "https://toe-highly-leasing-epic.trycloudflare.com";
 string  SECRET         = "death1";
+string  GRID           = "sl";      // "sl" for Second Life, "opensim" for OpenSimulator
 integer LISTEN_CHANNEL = 42;
 integer UI_CHANNEL     = -7654321;  // private dialog channel
 integer CHAT_BUF_SIZE  = 10;        // ambient chat lines to buffer
@@ -444,6 +445,7 @@ default
                 + "\"message\":\""      + json_s(message)           + "\","
                 + "\"region\":\""       + json_s(llGetRegionName()) + "\","
                 + "\"channel\":"        + (string)LISTEN_CHANNEL    + ","
+                + "\"grid\":\""         + GRID                      + "\","
                 + "\"nearby_chat\":[";
             integer ci;
             integer cn = llGetListLength(nearby_chat);

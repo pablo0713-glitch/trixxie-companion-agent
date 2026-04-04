@@ -17,6 +17,7 @@ class Settings:
     # Discord
     discord_token: str
     discord_allowed_guild_ids: list[int]
+    discord_active_channel_ids: list[int]  # channels where Trixxie responds without @mention
 
     # SL bot avatar credentials
     sl_bot_firstname: str
@@ -56,6 +57,11 @@ def load_settings() -> Settings:
         max_tokens=int(os.getenv("CLAUDE_MAX_TOKENS", "1024")),
         discord_token=os.getenv("DISCORD_TOKEN", ""),
         discord_allowed_guild_ids=guild_ids,
+        discord_active_channel_ids=[
+            int(c.strip())
+            for c in os.getenv("DISCORD_ACTIVE_CHANNEL_IDS", "").split(",")
+            if c.strip()
+        ],
         sl_bot_firstname=os.getenv("SL_BOT_FIRSTNAME", ""),
         sl_bot_lastname=os.getenv("SL_BOT_LASTNAME", ""),
         sl_bot_password=os.getenv("SL_BOT_PASSWORD", ""),

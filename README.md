@@ -39,6 +39,8 @@ Open `.env` and fill in:
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude API key from [console.anthropic.com](https://console.anthropic.com) |
 | `DISCORD_TOKEN` | Discord bot token |
+| `DISCORD_ALLOWED_GUILD_IDS` | Comma-separated server IDs Trixxie may operate in (empty = all) |
+| `DISCORD_ACTIVE_CHANNEL_IDS` | Comma-separated channel IDs where Trixxie responds without @mention |
 | `SEARCH_API_KEY` | Brave or Serper API key for web search |
 | `SEARCH_PROVIDER` | `brave` or `serper` |
 | `SL_BRIDGE_PORT` | Port for the SL HTTP bridge (default: `8080`) |
@@ -67,9 +69,17 @@ Trixxie starts the Discord bot and the SL HTTP bridge simultaneously.
 
 ### Discord
 
-@mention her in a server channel or send her a DM:
+@mention her in a server channel, send her a DM, or add her as a full participant in specific channels:
 
 > `@Trixxie what do you think of this color palette?`
+
+To have Trixxie respond to all messages in a channel without needing an @mention, add the channel ID to `DISCORD_ACTIVE_CHANNEL_IDS` in `.env`:
+
+```
+DISCORD_ACTIVE_CHANNEL_IDS=1234567890123456789
+```
+
+Comma-separate multiple channel IDs. To find a channel ID: enable Developer Mode in Discord Settings → Advanced, then right-click the channel → Copy Channel ID.
 
 ### Second Life
 
@@ -84,6 +94,14 @@ To chat with her in SL, speak on channel 42:
 Nobody else sees channel 42 messages. Her reply arrives as a private IM from her avatar.
 
 > **Setup required:** See [Second Life Setup](#second-life-setup) below.
+
+### Cool VL Viewer (Lua — native IM)
+
+If Trixxie's avatar is logged in through **Cool VL Viewer**, you can install the Lua automation script for a native private IM experience — no `/42` channel command needed. Just send her a private IM directly.
+
+She'll show a typing indicator while Claude processes your message, and her reply arrives in chunks in the same IM window.
+
+> **Setup:** See [lua/README.md](lua/README.md). The LSL HUD is still required for sensor context (avatars, environment, objects).
 
 ---
 
@@ -117,6 +135,55 @@ You'll see `Trixxie HUD ready. Listening on /42` in local chat (visible only to 
 ### 3. Log Trixxie in
 
 Log into her account through the SL viewer. She'll be in-world as a real avatar. The HUD does the rest.
+
+---
+
+## OpenSimulator Setup
+
+The HUD works on OpenSimulator (0.9.3.0+) with one change to the script. All LSL functions used in the HUD are supported in current OpenSim.
+
+### 1. Set the grid flag
+
+At the top of `lsl/companion_bridge.lsl`, change:
+
+```lsl
+string  GRID = "sl";
+```
+
+to:
+
+```lsl
+string  GRID = "opensim";
+```
+
+This tells the server to cap replies at 1800 chars, keeping the response inside OpenSim's default 2048-byte HTTP body limit.
+
+### 2. Tunnel requirement
+
+The SL HTTP bridge needs a valid HTTPS URL. Cloudflared works the same way for OpenSim as for Second Life:
+
+```bash
+cloudflared tunnel --url http://localhost:8080
+```
+
+Paste the public URL into `SERVER_URL` in the script.
+
+### 3. Optional: raise OpenSim's HTTP body limit
+
+If you want longer replies (up to 4000 chars) and have access to the OpenSim server configuration, add this to `OpenSim.ini`:
+
+```ini
+[Network]
+    HttpBodyMaxLenMAX = 16384
+```
+
+With this setting you can revert `GRID` back to `"sl"` for unrestricted reply length.
+
+### Tested grids
+
+- **OSGrid** — largest free public OpenSim grid
+- **Metropolis** — European grid
+- **Standalone** — single-machine private deployments
 
 ---
 
@@ -161,6 +228,9 @@ companion-agent/
 │   └── sl_bot/                  # Minimal UDP SL client (reference implementation)
 ├── lsl/
 │   └── companion_bridge.lsl     # HUD script worn by Trixxie's avatar
+├── lua/
+│   ├── trixxie_companion.lua    # Cool VL Viewer automation script (native IM loop)
+│   └── README.md                # Setup instructions for Lua interface
 └── data/                        # Runtime data (gitignored)
     ├── memory/
     └── notes/
@@ -185,7 +255,7 @@ Roleplay is welcome as long as it stays PG-rated. Fantasy combat (jousting, swor
 **Discord bot not responding:**
 - Confirm `DISCORD_TOKEN` is set in `.env`
 - Ensure **Message Content Intent** is enabled in the Discord Developer Portal
-- In servers, the bot only responds when @mentioned
+- In servers, the bot only responds when @mentioned — unless the channel ID is in `DISCORD_ACTIVE_CHANNEL_IDS`
 
 **SL HUD not triggering:**
 - Confirm `SERVER_URL` is set to your public tunnel URL (not `localhost`)
@@ -199,7 +269,8 @@ Roleplay is welcome as long as it stays PG-rated. Fantasy combat (jousting, swor
 
 ## Future Upgrades
 
-- **Vector memory (Phase 2):** Swap `FileMemoryStore` for `ChromaMemoryStore` — the abstract interface makes this a one-line change in `main.py`
+- **Radegast C# plugin:** Native IM loop for Radegast users — same `/sl/message` endpoint
 - **Named cloudflare tunnel:** A persistent subdomain so the `SERVER_URL` in the LSL script never changes
+- **Vector memory:** Swap `FileMemoryStore` for `ChromaMemoryStore` — the abstract interface makes this a one-line change in `main.py`
 - **More tools:** Add calendar, weather, SL Marketplace search, or music identification
 - **Web dashboard:** Memory files are plain JSON — readable by any future UI layer

@@ -33,11 +33,12 @@ class TrixxieBot(discord.Client):
             if message.guild.id not in self._settings.discord_allowed_guild_ids:
                 return
 
-        # Respond to: DMs always, server messages only when @mentioned
+        # Respond to: DMs always, @mentions always, active channels without @mention
         is_dm = isinstance(message.channel, discord.DMChannel)
         is_mentioned = self.user in message.mentions
+        is_active_channel = message.channel.id in self._settings.discord_active_channel_ids
 
-        if not is_dm and not is_mentioned:
+        if not is_dm and not is_mentioned and not is_active_channel:
             return
 
         # Strip the @mention prefix from the message text
