@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 
@@ -14,15 +15,21 @@ class SensorStore:
       objects      → latest snapshot (list of {name, distance, scripted})
       clothing     → latest scan result ({target, items: [...]})
       chat         → rolling list of notable events (last max_chat_events entries)
+
+    Each type also records an updated_at Unix timestamp so the agent can reason
+    about data freshness without being told how the pipeline works.
     """
 
     def __init__(self, max_chat_events: int = 10) -> None:
         self._store: dict[str, dict[str, Any]] = {}
+        self._updated_at: dict[str, dict[str, float]] = {}
+        self._last_sent: dict[str, dict[str, float]] = {}  # "{region}:{user_id}" → {stype: timestamp}
         self._max_chat = max_chat_events
 
     def update(self, region: str, sensor_type: str, data: Any) -> None:
         if region not in self._store:
             self._store[region] = {}
+            self._updated_at[region] = {}
         if sensor_type == "chat":
             events: list = self._store[region].get("chat_events", [])
             events.append(data)
@@ -31,7 +38,43 @@ class SensorStore:
             self._store[region]["chat_events"] = events
         else:
             self._store[region][sensor_type] = data
+        self._updated_at[region][sensor_type] = time.monotonic()
 
     def get_snapshot(self, region: str) -> dict[str, Any]:
-        """Return a copy of all sensor data for the given region."""
-        return dict(self._store.get(region, {}))
+        """Return a copy of all sensor data plus per-type age in seconds."""
+        snap = dict(self._store.get(region, {}))
+        ages = self._updated_at.get(region, {})
+        now = time.monotonic()
+        snap["_ages"] = {k: int(now - t) for k, t in ages.items()}
+        return snap
+
+    def get_changes(self, region: str, user_id: str) -> dict[str, Any]:
+        """Return only sensor types updated since this user's last message.
+
+        On first call for a user, returns everything. On subsequent calls,
+        returns only types whose data changed since the previous call.
+        This prevents identical sensor context from being injected on every
+        fast consecutive message.
+        """
+        store = self._store.get(region, {})
+        region_ages = self._updated_at.get(region, {})
+        user_key = f"{region}:{user_id}"
+        last_seen = self._last_sent.get(user_key, {})
+        now = time.monotonic()
+
+        snap: dict[str, Any] = {}
+        ages: dict[str, int] = {}
+
+        for stype, data in store.items():
+            updated = region_ages.get(stype, 0.0)
+            prev = last_seen.get(stype, -1.0)
+            if updated > prev:
+                snap[stype] = data
+                ages[stype] = int(now - updated)
+
+        if snap:
+            snap["_ages"] = ages
+            # Record what we just sent
+            self._last_sent[user_key] = {k: region_ages.get(k, 0.0) for k in snap if not k.startswith("_")}
+
+        return snap

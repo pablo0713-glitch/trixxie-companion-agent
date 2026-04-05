@@ -27,26 +27,28 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure environment
+### 2. Configure with the setup wizard
+
+Start the agent:
 
 ```bash
-cp .env.example .env
+./run.sh
 ```
 
-Open `.env` and fill in:
+Then open **[http://localhost:8080/setup](http://localhost:8080/setup)** in a browser. The 10-step wizard walks through:
 
-| Variable | Description |
-|---|---|
-| `ANTHROPIC_API_KEY` | Claude API key from [console.anthropic.com](https://console.anthropic.com) |
-| `DISCORD_TOKEN` | Discord bot token |
-| `DISCORD_ALLOWED_GUILD_IDS` | Comma-separated server IDs Trixxie may operate in (empty = all) |
-| `DISCORD_ACTIVE_CHANNEL_IDS` | Comma-separated channel IDs where Trixxie responds without @mention |
-| `SEARCH_API_KEY` | Brave or Serper API key for web search |
-| `SEARCH_PROVIDER` | `brave` or `serper` |
-| `SL_BRIDGE_PORT` | Port for the SL HTTP bridge (default: `8080`) |
-| `SL_BRIDGE_SECRET` | Optional shared secret for LSL authentication |
+- Agent name and persona
+- Model provider — **Anthropic (Claude)** or **Ollama (local)**
+- Platform credentials — Discord bot token, SL bridge secret
+- Persona sections — overview, personality, purpose, boundaries, roleplay rules
+- Tools — web search, notes, SL actions
+- Platform-specific behavior and additional context
+
+Configuration is saved to `.env` (credentials) and `data/agent_config.json` (persona). Persona changes take effect immediately. Model and credential changes require a restart.
 
 > **Discord setup:** In the [Discord Developer Portal](https://discord.com/developers), go to your bot → Bot → Privileged Gateway Intents and enable **Message Content Intent**.
+
+> **Ollama:** Any model pulled with `ollama pull <model>` works. Tool use support varies by model. Tested with `gemma4:e4b`.
 
 ### 3. Run
 
@@ -61,7 +63,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-Trixxie starts the Discord bot and the SL HTTP bridge simultaneously.
+The Discord bot and SL HTTP bridge start simultaneously. The setup wizard is always available at `/setup`.
 
 ---
 
@@ -207,11 +209,12 @@ Trixxie remembers across conversations:
 
 ```
 companion-agent/
-├── main.py                      # Entry point — starts Discord bot + SL bridge
+├── main.py                      # Entry point — starts Discord bot + SL bridge + wizard
 ├── config/settings.py           # Environment variable loader
 ├── core/
 │   ├── agent.py                 # AgentCore — shared brain for both platforms
-│   ├── persona.py               # Trixxie's system prompt and identity
+│   ├── model_adapter.py         # ModelAdapter — Anthropic and Ollama backends
+│   ├── persona.py               # Config-driven system prompt; self-awareness block
 │   ├── tools.py                 # Tool registry and dispatch
 │   ├── rate_limiter.py          # Per-user request throttling
 │   └── tool_handlers/
@@ -221,17 +224,27 @@ companion-agent/
 ├── memory/
 │   ├── base.py                  # Abstract memory interface
 │   ├── file_store.py            # File-based implementation
+│   ├── consolidator.py          # Background memory consolidation (every 6h)
+│   ├── person_map.py            # Discord + SL identity linking
+│   ├── location_store.py        # SL region/parcel visit history
 │   └── schemas.py               # Data models
 ├── interfaces/
+│   ├── setup_server.py          # Setup wizard API router (/setup)
 │   ├── discord_bot/             # Discord interface (discord.py)
-│   ├── sl_bridge/               # SL HTTP bridge (FastAPI) — primary SL path
-│   └── sl_bot/                  # Minimal UDP SL client (reference implementation)
+│   └── sl_bridge/               # SL HTTP bridge (FastAPI)
+├── setup/
+│   ├── index.html               # Wizard shell
+│   ├── style.css                # Dark theme
+│   └── wizard.js                # 10-step wizard
 ├── lsl/
-│   └── companion_bridge.lsl     # HUD script worn by Trixxie's avatar
+│   ├── companion_bridge.lsl     # HUD script worn by the agent's avatar
+│   └── ARCHITECTURE.md          # LSL internals, sensor formats, timer schedule
 ├── lua/
 │   ├── trixxie_companion.lua    # Cool VL Viewer automation script (native IM loop)
 │   └── README.md                # Setup instructions for Lua interface
 └── data/                        # Runtime data (gitignored)
+    ├── agent_config.json        # Persona and tool config (written by wizard)
+    ├── person_map.json          # Canonical identity → platform ID list
     ├── memory/
     └── notes/
 ```

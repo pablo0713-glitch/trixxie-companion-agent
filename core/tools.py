@@ -4,7 +4,6 @@ from typing import Any
 
 from config.settings import Settings
 from core.persona import MessageContext
-from core.tool_handlers import notes, sl_action, web_search
 
 
 # ------------------------------------------------------------------ schemas
@@ -13,7 +12,7 @@ WEB_SEARCH_SCHEMA = {
     "name": "web_search",
     "description": (
         "Search the web for current information, news, facts, shopping links, "
-        "SL sim details, music lookups, or anything where freshness matters. "
+        "sim details, music lookups, or anything where freshness matters. "
         "Returns titles, snippets, and URLs. Do not announce you're searching — "
         "incorporate results naturally."
     ),
@@ -40,7 +39,7 @@ SL_ACTION_SCHEMA = {
         "Send a private command to your Second Life presence. "
         "Only available in Second Life — do not call this on Discord. "
         "Actions are queued and executed after your reply is sent. "
-        "All output is private IM to StonedGrits — nothing goes to public chat."
+        "All output is private IM to the current user — nothing goes to public chat."
     ),
     "input_schema": {
         "type": "object",
@@ -50,7 +49,7 @@ SL_ACTION_SCHEMA = {
                 "enum": ["im", "emote", "anim_trigger"],
                 "description": (
                     "'im' = send a private instant message. "
-                    "'emote' = send *text* as a private IM (seen only by StonedGrits). "
+                    "'emote' = send *text* as a private IM (seen only by the target avatar). "
                     "'anim_trigger' = play a named animation on your avatar."
                 ),
             },
@@ -60,7 +59,7 @@ SL_ACTION_SCHEMA = {
             },
             "target_key": {
                 "type": "string",
-                "description": "Optional avatar UUID. Defaults to StonedGrits.",
+                "description": "Optional avatar UUID. Defaults to the current user.",
             },
         },
         "required": ["action_type", "text"],
@@ -79,7 +78,7 @@ NOTE_WRITE_SCHEMA = {
         "properties": {
             "title": {
                 "type": "string",
-                "description": "Short unique identifier. Examples: 'favorite_sims', 'creative_goals', 'sl_stores'.",
+                "description": "Short unique identifier. Examples: 'favorite_sims', 'creative_goals', 'shopping_list'.",
             },
             "content": {"type": "string", "description": "Note content. Plain text, can be multi-line."},
         },
@@ -113,9 +112,15 @@ class ToolRegistry:
         self._settings = settings
 
     def get_definitions(self, context: MessageContext) -> list[dict]:
-        """Return tool schemas appropriate for this context/platform."""
-        tools = [WEB_SEARCH_SCHEMA, NOTE_WRITE_SCHEMA, NOTE_READ_SCHEMA, NOTE_LIST_SCHEMA]
-        if context.platform == "sl":
+        from core.persona import get_agent_config
+        cfg_tools = get_agent_config().get("tools", {})
+
+        tools = []
+        if cfg_tools.get("web_search", True):
+            tools.append(WEB_SEARCH_SCHEMA)
+        if cfg_tools.get("notes", True):
+            tools.extend([NOTE_WRITE_SCHEMA, NOTE_READ_SCHEMA, NOTE_LIST_SCHEMA])
+        if context.platform == "sl" and cfg_tools.get("sl_action", True):
             tools.append(SL_ACTION_SCHEMA)
         return tools
 
@@ -126,6 +131,7 @@ class ToolRegistry:
         context: MessageContext,
         action_queue: list[dict],
     ) -> str:
+        from core.tool_handlers import notes, sl_action, web_search
         if name == "web_search":
             return await web_search.handle_web_search(
                 tool_input,

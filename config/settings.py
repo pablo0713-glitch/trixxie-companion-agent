@@ -9,22 +9,29 @@ load_dotenv()
 
 @dataclass
 class Settings:
+    # Model provider
+    model_provider: str        # "anthropic" | "ollama"
+
     # Anthropic
     anthropic_api_key: str
     claude_model: str
     max_tokens: int
 
+    # Ollama
+    ollama_base_url: str
+    ollama_model: str
+
     # Discord
     discord_token: str
     discord_allowed_guild_ids: list[int]
-    discord_active_channel_ids: list[int]  # channels where Trixxie responds without @mention
+    discord_active_channel_ids: list[int]
 
     # SL bot avatar credentials
     sl_bot_firstname: str
     sl_bot_lastname: str
     sl_bot_password: str
 
-    # SL HTTP bridge (optional — for local testing without a bot account)
+    # SL HTTP bridge
     sl_bridge_host: str
     sl_bridge_port: int
     sl_bridge_secret: str
@@ -44,6 +51,13 @@ class Settings:
 
 
 def load_settings() -> Settings:
+    model_provider = os.getenv("MODEL_PROVIDER", "anthropic").lower()
+
+    if model_provider == "anthropic":
+        anthropic_api_key = _require("ANTHROPIC_API_KEY")
+    else:
+        anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+
     guild_ids_raw = os.getenv("DISCORD_ALLOWED_GUILD_IDS", "").strip()
     guild_ids = (
         [int(g.strip()) for g in guild_ids_raw.split(",") if g.strip()]
@@ -52,9 +66,12 @@ def load_settings() -> Settings:
     )
 
     return Settings(
-        anthropic_api_key=_require("ANTHROPIC_API_KEY"),
+        model_provider=model_provider,
+        anthropic_api_key=anthropic_api_key,
         claude_model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6"),
-        max_tokens=int(os.getenv("CLAUDE_MAX_TOKENS", "1024")),
+        max_tokens=int(os.getenv("CLAUDE_MAX_TOKENS", "768")),
+        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+        ollama_model=os.getenv("OLLAMA_MODEL", "llama3.2"),
         discord_token=os.getenv("DISCORD_TOKEN", ""),
         discord_allowed_guild_ids=guild_ids,
         discord_active_channel_ids=[

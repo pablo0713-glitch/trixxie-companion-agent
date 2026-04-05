@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Setup</title>
+  <link rel="stylesheet" href="/setup/static/style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="wiz-header">
+      <div class="wiz-title-row">
+        <span class="wiz-logo">✦</span>
+        <h1 id="page-title">Agent Setup</h1>
+      </div>
+      <div class="step-bar" id="step-bar"></div>
+    </header>
+
+    <main id="step-content" class="step-content"></main>
+
+    <footer class="wiz-footer">
+      <button class="btn btn-ghost" id="btn-prev">← Back</button>
+      <span class="step-counter" id="step-counter"></span>
+      <button class="btn btn-primary" id="btn-next">Next →</button>
+    </footer>
+  </div>
+
+  <script src="/setup/static/wizard.js"></script>
+</body>
+</html>

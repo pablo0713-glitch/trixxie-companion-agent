@@ -4,14 +4,17 @@ import asyncio
 import logging
 import os
 
-import anthropic
 import uvicorn
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 
 from config.settings import load_settings
 from core.agent import AgentCore
+from core.model_adapter import create_adapter
 from core.rate_limiter import RateLimiter
 from core.tools import ToolRegistry
 from interfaces.discord_bot.bot import TrixxieBot
+from interfaces.setup_server import create_setup_router
 from interfaces.sl_bridge.sensor_store import SensorStore
 from interfaces.sl_bridge.server import create_sl_app
 from memory.consolidator import MemoryConsolidator
@@ -40,21 +43,20 @@ async def main() -> None:
     location_store = LocationStore(settings.memory_dir)
     tool_registry = ToolRegistry(settings)
     rate_limiter = RateLimiter(settings.rate_limit_capacity, settings.rate_limit_refill_rate)
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    adapter = create_adapter(settings)
 
     person_map = PersonMap.load(PERSON_MAP_PATH)
     logger.info("Person map loaded: %d person(s) linked", len(person_map.all_persons()))
 
     consolidator = MemoryConsolidator(
-        client=client,
+        adapter=adapter,
         memory_store=memory,
         person_map=person_map,
         notes_dir=settings.notes_dir,
-        model=settings.claude_model,
     )
 
     agent = AgentCore(
-        client=client,
+        adapter=adapter,
         memory=memory,
         tool_registry=tool_registry,
         rate_limiter=rate_limiter,
@@ -81,8 +83,17 @@ async def main() -> None:
     else:
         logger.warning("DISCORD_TOKEN not set — Discord bot will not start.")
 
-    # ---- Second Life HTTP bridge (always runs — used by Trixxie's in-world HUD) ----
+    # ---- Second Life HTTP bridge (always runs) ----
     sl_app = create_sl_app(agent, settings, sensor_store, location_store)
+
+    # ---- Setup wizard ----
+    sl_app.include_router(create_setup_router())
+    sl_app.mount(
+        "/setup/static",
+        StaticFiles(directory=str(Path(__file__).parent / "setup")),
+        name="setup_static",
+    )
+
     config = uvicorn.Config(
         sl_app,
         host=settings.sl_bridge_host,

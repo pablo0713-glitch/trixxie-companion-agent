@@ -58,9 +58,8 @@ def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStor
             logger.warning("SL bridge: invalid secret from %s", payload.user_id)
             return SLOutboundResponse(reply="Authentication failed.", actions=[])
 
-        sensor_ctx = sensor_store.get_snapshot(payload.region)
-
         sl_user_id = f"sl_{payload.user_id}"
+        sensor_ctx = sensor_store.get_changes(payload.region, sl_user_id)
         recent_locations: list[dict] = []
         if location_store:
             recent_locations = await location_store.get_recent_visits(sl_user_id, limit=10)

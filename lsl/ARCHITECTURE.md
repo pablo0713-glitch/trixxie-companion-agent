@@ -134,20 +134,31 @@ Only worn attachments (non-zero attachment point) owned by the scanned avatar ar
 
 ## Timer Architecture
 
-A 30-second tick drives all periodic scanning:
+The HUD uses a single 30-second tick (`TICK_SECS = 30.0`). All scanning is driven by this tick, either on a counted interval or by a change-detection check.
 
-```
-tick 0          → (startup) env scan
-tick 5, 10, ... → avatar scan  (every AV_TICKS = 5 ticks = 150 s)
-any tick        → region change check  → env scan + object scan
-                → parcel change check  → env scan  (if region unchanged)
-```
+### Interval schedule
 
-On each tick the HUD:
-1. Checks whether the current region differs from `last_region` — if so, runs a full env + object scan and updates `last_region`.
-2. Otherwise, if `s_env` is enabled, reads the current parcel name via `llGetParcelDetails` and compares it to `last_parcel`. A mismatch triggers a fresh env scan, updating `last_parcel`.
+| Trigger | Interval | Sensors fired |
+|---|---|---|
+| Startup (`state_entry`) | once | environment |
+| Region change | immediate on detection | environment + objects |
+| Parcel border crossing | immediate on detection | environment + objects |
+| Every 5 ticks | 150 s | avatars |
+| Every 10 ticks | 300 s | objects |
+| Every 20 ticks | 600 s | environment (time-of-day drift) |
 
-This means a parcel transition within the same region (common in large mainland sims) produces a new environment post within at most one timer tick (30 s).
+### Change detection
+
+On every tick, before interval checks run:
+
+1. **Region change** — compares `llGetRegionName()` to `last_region`. On mismatch: fires env + object scans, resets `tick = 0`, and returns early (skips interval checks for that tick).
+2. **Parcel border crossing** — if region is unchanged, reads the current parcel name via `llGetParcelDetails` and compares to `last_parcel`. On mismatch: fires env + object scans. `do_env_scan()` always updates `last_parcel`.
+
+This means a parcel transition within the same region (common on large mainland sims) produces updated environment and object data within at most one timer tick (30 s).
+
+### Server-side deduplication
+
+The server's `SensorStore.get_changes()` tracks the timestamp of the last sensor snapshot delivered to each user. On consecutive fast messages, only sensor types that have been refreshed since the user's previous message are injected into the system prompt — unchanged snapshots are suppressed entirely.
 
 ---
 

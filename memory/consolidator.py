@@ -5,26 +5,23 @@ import os
 from datetime import datetime, timezone
 
 import aiofiles
-import anthropic
 
+from core.model_adapter import ModelAdapter
+from core.persona import get_agent_config
 from memory.file_store import FileMemoryStore
 from memory.person_map import PersonMap
 from memory.schemas import ConversationFile
 
 logger = logging.getLogger(__name__)
 
-# Trigger consolidation when any single conversation file exceeds this many turns.
 CONSOLIDATION_THRESHOLD = 40
-
-# How many turns to keep in each conversation file after consolidation.
 KEEP_TURNS_AFTER = 10
 
 
 class MemoryConsolidator:
     """
-    Periodically reads Trixxie's conversation files for each known person,
-    asks Claude to extract what's worth remembering, saves the result as a
-    Markdown note under {notes_dir}/{person_id}/memories_{date}.md, then
+    Periodically reads conversation files for each known person, asks the model
+    to extract what's worth remembering, saves the result as a Markdown note, then
     trims the source conversation files.
 
     Cross-platform consolidation: all user_ids linked to the same person
@@ -33,31 +30,26 @@ class MemoryConsolidator:
 
     def __init__(
         self,
-        client: anthropic.AsyncAnthropic,
+        adapter: ModelAdapter,
         memory_store: FileMemoryStore,
         person_map: PersonMap,
         notes_dir: str,
-        model: str,
         threshold: int = CONSOLIDATION_THRESHOLD,
         keep_turns: int = KEEP_TURNS_AFTER,
     ) -> None:
-        self._client = client
+        self._adapter = adapter
         self._store = memory_store
         self._person_map = person_map
         self._notes_dir = notes_dir
-        self._model = model
         self._threshold = threshold
         self._keep_turns = keep_turns
 
     async def run_all(self) -> None:
-        """Check every known person and consolidate if the threshold is exceeded."""
         for person_id in self._person_map.all_persons():
             try:
                 await self._check_and_consolidate(person_id)
             except Exception:
                 logger.exception("Consolidation failed for person '%s'", person_id)
-
-    # ------------------------------------------------------------------ internals
 
     async def _check_and_consolidate(self, person_id: str) -> None:
         user_ids = self._person_map.get_person_user_ids(person_id)
@@ -85,14 +77,17 @@ class MemoryConsolidator:
             for conv in convs:
                 await self._store.trim_history(uid, conv.channel_id, self._keep_turns)
 
-        logger.info("Consolidation complete for '%s'. Files trimmed to %d turns.", person_id, self._keep_turns)
+        logger.info(
+            "Consolidation complete for '%s'. Files trimmed to %d turns.",
+            person_id, self._keep_turns,
+        )
 
     async def _consolidate(self, person_id: str, convs: list[ConversationFile]) -> None:
         transcript = _build_transcript(convs)
         if not transcript.strip():
             return
 
-        notes_text = await self._ask_claude(person_id, transcript)
+        notes_text = await self._ask_model(person_id, transcript)
         if not notes_text:
             return
 
@@ -107,35 +102,38 @@ class MemoryConsolidator:
 
         logger.info("Memory notes written → %s", path)
 
-    async def _ask_claude(self, person_id: str, transcript: str) -> str:
+    async def _ask_model(self, person_id: str, transcript: str) -> str:
+        cfg = get_agent_config()
+        agent_name = cfg.get("agent_name", "the agent")
+
         prompt = (
-            f"You are Trixxie Carissa. You're reviewing your conversation logs "
-            f"with {person_id} across Second Life and Discord.\n\n"
+            f"You are {agent_name}. You're reviewing your conversation logs "
+            f"with {person_id} across connected platforms.\n\n"
             f"Here are the conversations:\n\n{transcript}\n\n"
             f"Write your personal memory notes about {person_id}. Include:\n"
             f"- Important facts about them (name, preferences, context)\n"
-            f"- Their aesthetic tastes and interests\n"
+            f"- Their interests and aesthetic tastes\n"
             f"- Ongoing projects or topics you've discussed\n"
             f"- Things that clearly matter to them\n"
-            f"- Recurring themes, inside references, or anything to carry forward\n"
-            f"- How they use each platform and what they tend to talk to you about there\n\n"
-            f"Write in first person as Trixxie, as if writing in a personal journal. "
+            f"- Recurring themes or anything to carry forward\n"
+            f"- How they use each platform and what they tend to talk about there\n\n"
+            f"Write in first person as {agent_name}, as if writing in a personal journal. "
             f"Be selective — only keep what is genuinely worth remembering. "
             f"Do not include tool calls, raw JSON, or system messages."
         )
 
-        response = await self._client.messages.create(
-            model=self._model,
-            max_tokens=1024,
+        return await self._adapter.create_simple(
+            system="",
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=1024,
         )
-        return response.content[0].text if response.content else ""
 
 
 # ------------------------------------------------------------------ helpers
 
 def _build_transcript(convs: list[ConversationFile]) -> str:
-    """Format all conversation files into a readable transcript for Claude."""
+    cfg = get_agent_config()
+    agent_name = cfg.get("agent_name", "Agent")
     parts: list[str] = []
 
     for conv in sorted(convs, key=lambda c: c.updated_at):
@@ -143,11 +141,10 @@ def _build_transcript(convs: list[ConversationFile]) -> str:
         lines = [header]
 
         for turn in conv.turns:
-            role_label = "Trixxie" if turn["role"] == "assistant" else "User"
+            role_label = agent_name if turn["role"] == "assistant" else "User"
             content = turn.get("content", "")
 
             if isinstance(content, list):
-                # Extract only text blocks; skip tool_use / tool_result noise
                 texts = [
                     b.get("text", "")
                     for b in content
@@ -156,7 +153,6 @@ def _build_transcript(convs: list[ConversationFile]) -> str:
                 content = " ".join(t for t in texts if t)
 
             if content:
-                # Truncate very long turns to keep the prompt manageable
                 if len(content) > 500:
                     content = content[:500] + "…"
                 lines.append(f"{role_label}: {content}")

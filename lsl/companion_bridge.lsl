@@ -31,7 +31,9 @@ integer AV_MAX      = 25;
 // --- Timer ---
 float   TICK_SECS  = 30.0;
 integer tick       = 0;
-integer AV_TICKS   = 5;    // avatar scan every 5 ticks = 150s
+integer AV_TICKS   = 5;    // avatar scan every  5 ticks =  150s
+integer OBJ_TICKS  = 10;   // object scan every 10 ticks =  300s
+integer ENV_TICKS  = 20;   // env scan every    20 ticks =  600s (time-of-day drift)
 
 // --- Region/parcel tracking (env scan fires on region OR parcel change) ---
 string  last_region = "";
@@ -369,7 +371,7 @@ default
     {
         tick++;
 
-        // Region change → re-scan environment and objects
+        // Region change → re-scan everything, reset tick counter
         string r = llGetRegionName();
         if (r != last_region)
         {
@@ -378,18 +380,28 @@ default
             tick = 0;
             do_env_scan();
             if (s_objects) do_object_scan();
+            return;
         }
-        else if (s_env)
+
+        // Parcel border crossing → re-scan environment + objects
+        string p = llList2String(llGetParcelDetails(llGetPos(), [PARCEL_DETAILS_NAME]), 0);
+        if (p != last_parcel)
         {
-            // Parcel change within the same region → re-scan environment
-            string p = llList2String(llGetParcelDetails(llGetPos(), [PARCEL_DETAILS_NAME]), 0);
-            if (p != last_parcel)
-                do_env_scan();
+            do_env_scan();          // sets last_parcel inside do_env_scan
+            if (s_objects) do_object_scan();
         }
 
         // Avatar scan on interval
         if (s_avatars && (tick % AV_TICKS) == 0)
             do_avatar_scan();
+
+        // Object scan on slow interval (position within parcel may have changed)
+        if (s_objects && (tick % OBJ_TICKS) == 0)
+            do_object_scan();
+
+        // Environment slow interval — captures time-of-day drift without a border crossing
+        if (s_env && (tick % ENV_TICKS) == 0)
+            do_env_scan();
     }
 
     listen(integer channel, string name, key id, string message)

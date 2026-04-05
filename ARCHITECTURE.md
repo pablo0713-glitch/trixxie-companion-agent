@@ -54,10 +54,24 @@ core/
                                  persists all turns, returns AgentResponse.
                                  Uses AsyncAnthropic — fully non-blocking.
 
-  persona.py        Persona      Trixxie's identity. Builds the system prompt from
-                                 static text blocks + runtime-injected context.
+  persona.py        Persona      Config-driven identity. Loads agent_config.json
+                                 (or defaults) via get_agent_config() with
+                                 module-level cache. reload_agent_config() invalidates
+                                 the cache after wizard saves.
+                                 _build_self_awareness_block() injects platform-specific
+                                 pipeline awareness — what the agent can perceive, what
+                                 it cannot do, how memory consolidation works.
                                  MessageContext carries platform, user, channel,
                                  sensor data, and recent location history.
+
+  model_adapter.py  ModelAdapter Abstract adapter over the model client.
+                                 AnthropicAdapter wraps AsyncAnthropic.
+                                 OllamaAdapter wraps openai.AsyncOpenAI pointed at
+                                 the Ollama /v1 endpoint, with full Anthropic↔OpenAI
+                                 message format conversion.
+                                 ModelResponse.history_content is always Anthropic-
+                                 format dicts regardless of provider — FileMemoryStore
+                                 always receives plain dicts.
 
   tools.py          ToolRegistry Holds tool schemas and dispatch logic.
                                  get_definitions(context) filters by platform —
@@ -108,13 +122,20 @@ interfaces/
                                           POST /sl/sensor — stores sensor data,
                                             records location visits on environment posts.
                                           POST /sl/message — loads location history,
+                                            calls SensorStore.get_changes() for this user,
                                             builds MessageContext, calls AgentCore.
                                           Always returns HTTP 200 — errors go in the
                                           JSON body to protect LSL's error throttle.
-    sensor_store.py   SensorStore         In-memory snapshot of latest sensor data
-                                          per region. Passed into MessageContext.
-    formatters.py                         Trims reply to SL's 1,023-char IM limit.
-                                          Normalizes Unicode to ASCII for SL compat.
+    sensor_store.py   SensorStore         In-memory snapshot of latest sensor data per
+                                          region. Tracks per-type update timestamps and
+                                          per-user last-delivered timestamps.
+                                          get_changes(region, user_id) returns only types
+                                          updated since that user's last message —
+                                          suppresses unchanged snapshots on fast replies.
+                                          Snapshot includes _ages dict (seconds since
+                                          update) surfaced as labels in the system prompt.
+    formatters.py                         Grid-aware reply cap: 4000 chars (SL) or 1800
+                                          chars (OpenSim). Normalizes Unicode to ASCII.
 
   discord_bot/
     bot.py          TrixxieBot            discord.py Client. Responds to @mentions
@@ -137,6 +158,20 @@ lua/
                                           OnReceivedChat feeds ambient chat buffer.
                                           Replaces the /42 conversation path; sensor HUD
                                           remains required for environmental context.
+
+setup/
+  index.html                              Wizard shell — step bar, content area, footer.
+  style.css                               Dark theme, toggle switches, platform/tool cards.
+  wizard.js                               10-step configuration wizard. Fetches current
+                                          config on load, collects state per step, POSTs
+                                          to /setup/config on save. Masked secrets pass
+                                          through unchanged.
+
+interfaces/
+  setup_server.py                         FastAPI APIRouter for the setup wizard.
+                                          GET /setup, /setup/status, /setup/config.
+                                          POST /setup/config — writes .env and
+                                          agent_config.json, calls reload_agent_config().
 ```
 
 ---
@@ -244,15 +279,19 @@ Deduplication key: `"{region}\x00{parcel}"` — the null byte ensures region and
 
 | Section | Source | Condition |
 |---|---|---|
-| Core persona | `TRIXXIE_CORE` constant | Always |
-| Platform addendum | `SL_ADDENDUM` or `DISCORD_ADDENDUM` | Always |
+| Core persona | `_build_core_block(cfg)` from `agent_config.json` | Always |
+| Self-awareness | `_build_self_awareness_block(context)` | Always — platform-specific |
+| Platform addendum | `cfg["addenda"]["discord\|sl"]` or built-in fallback | Always |
 | Current sim | `context.sl_region` | SL only |
 | Nearby chat | `context.sl_nearby_chat[-10:]` | SL only, if non-empty |
-| Sensor context | `context.sl_sensor_context` | SL only, if non-empty |
+| Sensor context | `context.sl_sensor_context` (changed types only) | SL only, if non-empty |
 | Places visited | `context.sl_recent_locations` | SL only, if non-empty |
+| Additional context | `cfg["additional_context"]` | If non-empty |
 | Memory notes | `data/notes/{person_id}/memories_*.md` | If consolidated notes exist |
 | Cross-platform context | Recent turns from linked platform(s) | If linked IDs exist |
 | Known facts | `memory.get_facts(user_id)` | If non-empty |
+
+The self-awareness block tells the agent what it can perceive, what it cannot do, and how memory consolidation works — framed in first person so it can speak to these naturally if asked. It is hardcoded (not wizard-configurable) to ensure it is always accurate and consistent.
 
 ---
 
@@ -269,14 +308,14 @@ Trixxie's HUD (LSL, channel 42 listener)
         ▼
 cloudflared tunnel  →  FastAPI bridge (localhost:8080)
         │
-        ├── SensorStore.get_snapshot(region)       ← latest sensor data
+        ├── SensorStore.get_changes(region, uid)   ← only types updated since last msg
         ├── LocationStore.get_recent_visits(uid)   ← SL visit history
         │
         ▼
 AgentCore.handle_message()
-        │  builds system prompt with persona + sensor + memory + locations
+        │  builds system prompt with persona + self-awareness + sensor + memory + locations
         ▼
-Claude API  →  reply text (+ optional sl_actions)
+Model API  →  reply text (+ optional sl_actions)
         │
         ▼
 FastAPI returns JSON: { "reply": "...", "actions": [...] }
@@ -300,7 +339,7 @@ automation.lua — OnInstantMsg(session_id, origin_id, type=0, ...)
         ▼
 cloudflared tunnel  →  FastAPI bridge (localhost:8080)
         │
-        ├── SensorStore.get_snapshot(region)       ← latest sensor data (from HUD)
+        ├── SensorStore.get_changes(region, uid)   ← only types updated since last msg
         ├── LocationStore.get_recent_visits(uid)   ← SL visit history
         │
         ▼
