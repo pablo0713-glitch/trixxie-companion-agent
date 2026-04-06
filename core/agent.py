@@ -5,6 +5,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+import time
+
 import aiofiles
 
 from config.settings import Settings
@@ -46,6 +48,8 @@ class AgentCore:
         self._rate_limiter = rate_limiter
         self._settings = settings
         self._person_map = person_map
+        self._last_prompt: dict[str, str] = {}
+        self._last_exchange: dict[str, dict] = {}
 
     async def handle_message(self, message: str, context: MessageContext) -> AgentResponse:
         if not self._rate_limiter.check(context.user_id):
@@ -68,6 +72,7 @@ class AgentCore:
                 cross_platform_context = await self._load_cross_platform_context(linked_ids)
 
         system_prompt = build_system_prompt(context, facts, memory_notes, cross_platform_context)
+        self._last_prompt[context.user_id] = system_prompt
         messages = list(history) + [{"role": "user", "content": message}]
 
         await self._memory.append_turn(
@@ -79,6 +84,14 @@ class AgentCore:
             reply_text, assistant_turns = await self._run_tool_loop(
                 messages, system_prompt, context, sl_action_queue
             )
+            self._last_exchange[context.user_id] = {
+                "ts": time.time(),
+                "platform": context.platform,
+                "user_message": message,
+                "system_prompt": system_prompt,
+                "reply_text": reply_text,
+                "assistant_turns": assistant_turns,
+            }
         except Exception as exc:
             logger.exception("Error in tool loop: %s", exc)
             return AgentResponse(
@@ -95,6 +108,15 @@ class AgentCore:
             )
 
         return AgentResponse(text=reply_text, sl_actions=sl_action_queue)
+
+    def get_last_prompt(self, user_id: str) -> str | None:
+        return self._last_prompt.get(user_id)
+
+    def get_last_exchange(self, user_id: str) -> dict | None:
+        return self._last_exchange.get(user_id)
+
+    def all_tracked_users(self) -> list[str]:
+        return list(self._last_prompt.keys())
 
     async def _load_memory_notes(self, person_id: str) -> str:
         notes_dir = os.path.join(self._settings.notes_dir, person_id)

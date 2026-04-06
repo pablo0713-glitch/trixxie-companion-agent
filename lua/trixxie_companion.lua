@@ -14,25 +14,15 @@
 local SERVER_URL    = "https://your-tunnel.trycloudflare.com"
 local SECRET        = ""
 local GRID          = "sl"       -- "sl" or "opensim"
-local CHAT_BUF_SIZE = 10         -- ambient chat lines to buffer
 local IM_CHUNK_SIZE = 1000       -- max chars per SendIM call
 
 -- --- State ---
 local pending_ims = {}    -- [handle] = {session_id, origin_id}
-local nearby_chat = {}    -- rolling buffer of recent local chat lines
 
 
 -- ================================================================
 -- Helpers
 -- ================================================================
-
--- Append a line to the nearby_chat buffer, dropping the oldest if full.
-local function append_chat(line)
-    nearby_chat[#nearby_chat + 1] = line
-    if #nearby_chat > CHAT_BUF_SIZE then
-        table.remove(nearby_chat, 1)
-    end
-end
 
 -- Split text into chunks of at most IM_CHUNK_SIZE chars, breaking at the last
 -- sentence boundary (". ", "! ", "? ", "\n") in the second half of the chunk.
@@ -108,6 +98,8 @@ function OnInstantMsg(session_id, origin_id, msg_type, name, text)
         region = grid_info["region"] or ""
     end
 
+    -- Chat context is delivered via the HUD's sensor pipeline (/sl/sensor type="chat"),
+    -- not piggybacked on this request. The HUD must be worn and running.
     local payload = {
         user_id      = origin_id,
         display_name = name,
@@ -116,9 +108,6 @@ function OnInstantMsg(session_id, origin_id, msg_type, name, text)
         channel      = 42,
         grid         = GRID,
     }
-    if #nearby_chat > 0 then
-        payload["nearby_chat"] = nearby_chat
-    end
 
     -- Include secret in body (PostHTTP does not support custom headers).
     if SECRET and SECRET ~= "" then
@@ -182,16 +171,7 @@ function OnHTTPReply(handle, success, reply)
 end
 
 
--- ================================================================
--- OnReceivedChat — feeds the ambient nearby-chat buffer
--- type == 1 : normal avatar speech on channel 0
--- ================================================================
-function OnReceivedChat(chat_type, from_id, is_avatar, name, text)
-    -- Only capture normal open-channel speech from avatars.
-    if chat_type ~= 1 then return end
-    if not is_avatar then return end
-
-    -- text already includes the speaker name in the viewer's format;
-    -- build the same "Name: message" format the LSL HUD produces.
-    append_chat(name .. ": " .. text)
-end
+-- OnReceivedChat is intentionally not implemented here.
+-- Nearby chat is captured by the LSL HUD's channel 0 listener, flushed to
+-- /sl/sensor every 90s, and delivered via SensorStore.get_changes() on the
+-- next message. The HUD must be worn and running alongside this script.

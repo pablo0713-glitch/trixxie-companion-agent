@@ -24,6 +24,9 @@ integer s_avatars = TRUE;
 integer s_chat    = TRUE;
 integer s_env     = TRUE;
 integer s_objects = TRUE;
+// s_stream = TRUE  → sensors POST on independent timers (continuous)
+// s_stream = FALSE → sensors POST only when a /42 message is sent
+integer s_stream  = TRUE;
 
 // --- Avatar scan: returns the closest avatars in the region (hard cap) ---
 integer AV_MAX      = 25;
@@ -34,6 +37,7 @@ integer tick       = 0;
 integer AV_TICKS   = 5;    // avatar scan every  5 ticks =  150s
 integer OBJ_TICKS  = 10;   // object scan every 10 ticks =  300s
 integer ENV_TICKS  = 20;   // env scan every    20 ticks =  600s (time-of-day drift)
+integer CHAT_TICKS = 3;    // chat flush every   3 ticks =   90s
 
 // --- Region/parcel tracking (env scan fires on region OR parcel change) ---
 string  last_region = "";
@@ -217,6 +221,32 @@ do_env_scan()
 
 
 // ================================================================
+// Sensor: Chat flush — POST accumulated nearby_chat to /sl/sensor
+// ================================================================
+
+key sk_chat = NULL_KEY;
+
+do_chat_flush()
+{
+    if (!s_chat) return;
+    integer cn = llGetListLength(nearby_chat);
+    if (cn == 0) return;
+
+    string arr = "[";
+    integer ci;
+    for (ci = 0; ci < cn; ci++)
+    {
+        if (ci > 0) arr += ",";
+        arr += "\"" + llList2String(nearby_chat, ci) + "\"";
+    }
+    arr += "]";
+
+    nearby_chat = [];   // clear buffer after flush
+    sk_chat = sensor_post("chat", arr);
+}
+
+
+// ================================================================
 // Sensor: Object Proximity (triggers LSL sensor sweep)
 // ================================================================
 
@@ -246,24 +276,29 @@ do_clothing_scan()
 
 show_menu()
 {
+    string mode = "Str:" + (string)s_stream;
     llDialog(llGetOwner(),
         "Trixxie Sensory HUD\nAv:" + (string)s_avatars
         + " Ch:" + (string)s_chat
         + " En:" + (string)s_env
-        + " Ob:" + (string)s_objects,
+        + " Ob:" + (string)s_objects
+        + " " + mode,
         ["Avatars", "Chat", "Environment", "Objects",
-         "Scan Target", "Status", "Close"],
+         "Streaming", "Scan Target", "Status", "Close"],
         UI_CHANNEL);
 }
 
 show_status()
 {
+    string mode = "Streaming";
+    if (!s_stream) mode = "Per-message";
     llOwnerSay(
         "=== Sensory HUD ===\n"
         + "Avatars : " + (string)s_avatars + "  [closest " + (string)AV_MAX + " in region]\n"
         + "Chat    : " + (string)s_chat    + "  [last 10 messages]\n"
         + "Env     : " + (string)s_env     + "\n"
         + "Objects : " + (string)s_objects + "\n"
+        + "Mode    : " + mode + "\n"
         + "Region  : " + llGetRegionName()
     );
 }
@@ -391,17 +426,21 @@ default
             if (s_objects) do_object_scan();
         }
 
-        // Avatar scan on interval
-        if (s_avatars && (tick % AV_TICKS) == 0)
-            do_avatar_scan();
+        // Interval sensor posts — only in streaming mode
+        if (s_stream)
+        {
+            if (s_avatars && (tick % AV_TICKS) == 0)
+                do_avatar_scan();
 
-        // Object scan on slow interval (position within parcel may have changed)
-        if (s_objects && (tick % OBJ_TICKS) == 0)
-            do_object_scan();
+            if (s_objects && (tick % OBJ_TICKS) == 0)
+                do_object_scan();
 
-        // Environment slow interval — captures time-of-day drift without a border crossing
-        if (s_env && (tick % ENV_TICKS) == 0)
-            do_env_scan();
+            if (s_env && (tick % ENV_TICKS) == 0)
+                do_env_scan();
+
+            if (s_chat && (tick % CHAT_TICKS) == 0)
+                do_chat_flush();
+        }
     }
 
     listen(integer channel, string name, key id, string message)
@@ -434,6 +473,7 @@ default
                 if (s_objects) do_object_scan();
                 show_menu();
             }
+            else if (message == "Streaming")   { s_stream  = !s_stream;  show_menu(); }
             else if (message == "Scan Target") { do_clothing_scan(); }
             else if (message == "Status")      { show_status(); }
             else if (message == "Close")       { }
@@ -451,22 +491,25 @@ default
 
             reply_sender = id;
 
+            // Flush any chat accumulated since the last send
+            do_chat_flush();
+
+            // In per-message mode, refresh avatars + environment now (objects need
+            // async llSensor so they update on region/parcel crossing only)
+            if (!s_stream)
+            {
+                do_avatar_scan();
+                do_env_scan();
+            }
+
             string body = "{"
                 + "\"user_id\":\""      + (string)id               + "\","
                 + "\"display_name\":\"" + json_s(name)              + "\","
                 + "\"message\":\""      + json_s(message)           + "\","
                 + "\"region\":\""       + json_s(llGetRegionName()) + "\","
                 + "\"channel\":"        + (string)LISTEN_CHANNEL    + ","
-                + "\"grid\":\""         + GRID                      + "\","
-                + "\"nearby_chat\":[";
-            integer ci;
-            integer cn = llGetListLength(nearby_chat);
-            for (ci = 0; ci < cn; ci++)
-            {
-                if (ci > 0) body += ",";
-                body += "\"" + llList2String(nearby_chat, ci) + "\"";
-            }
-            body += "]}";
+                + "\"grid\":\""         + GRID                      + "\""
+                + "}";
 
             list p = [
                 HTTP_METHOD, "POST",
@@ -532,10 +575,11 @@ default
     http_response(key req, integer status, list meta, string body)
     {
         // Sensor posts — fire and forget, just clear the key
-        if (req == sk_av)  { sk_av  = NULL_KEY; return; }
-        if (req == sk_env) { sk_env = NULL_KEY; return; }
-        if (req == sk_obj) { sk_obj = NULL_KEY; return; }
-        if (req == sk_clo) { sk_clo = NULL_KEY; return; }
+        if (req == sk_av)   { sk_av   = NULL_KEY; return; }
+        if (req == sk_env)  { sk_env  = NULL_KEY; return; }
+        if (req == sk_obj)  { sk_obj  = NULL_KEY; return; }
+        if (req == sk_clo)  { sk_clo  = NULL_KEY; return; }
+        if (req == sk_chat) { sk_chat = NULL_KEY; return; }
 
         // Reply flow
         if (req != reply_http) return;

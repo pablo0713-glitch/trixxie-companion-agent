@@ -25,7 +25,6 @@ class SLInboundPayload(BaseModel):
     region: str
     channel: int = 0
     timestamp: int = 0
-    nearby_chat: list[str] = []
     grid: str = "sl"   # "sl" or "opensim" — controls reply size cap
     secret: str = ""   # body-based auth for clients that cannot send custom headers (e.g. Lua PostHTTP)
 
@@ -70,7 +69,6 @@ def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStor
             channel_id=f"sl_{payload.channel}",
             display_name=payload.display_name,
             sl_region=payload.region,
-            sl_nearby_chat=payload.nearby_chat,
             sl_sensor_context=sensor_ctx,
             sl_recent_locations=recent_locations,
         )

@@ -65,6 +65,18 @@ python main.py
 
 The Discord bot and SL HTTP bridge start simultaneously. The setup wizard is always available at `/setup`.
 
+### 4. Debug Page
+
+Once the agent is running, open **[http://localhost:8080/debug](http://localhost:8080/debug)** in a browser for live inspection:
+
+| Tab | What it shows |
+|---|---|
+| **Logs** | Real-time Python log stream (SSE). Filter by level and logger name. |
+| **Sensors** | Live SensorStore snapshot per region — sensor types, values, and ages. Auto-refreshes every 5 seconds. |
+| **Prompts & Exchanges** | Last system prompt and full message exchange per tracked user. Auto-refreshes every 10 seconds. |
+
+Use the debug page to verify what sensor data the agent is actually receiving, inspect the system prompt that was built for a given user, and diagnose unexpected behavior without reading raw log files.
+
 ---
 
 ## Talking to Trixxie
@@ -230,6 +242,7 @@ companion-agent/
 │   └── schemas.py               # Data models
 ├── interfaces/
 │   ├── setup_server.py          # Setup wizard API router (/setup)
+│   ├── debug_server.py          # Debug page + SSE log stream (/debug)
 │   ├── discord_bot/             # Discord interface (discord.py)
 │   └── sl_bridge/               # SL HTTP bridge (FastAPI)
 ├── setup/

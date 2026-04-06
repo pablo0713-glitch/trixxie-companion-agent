@@ -155,7 +155,8 @@ lua/
                                           Copy to user_settings/automation.lua.
                                           OnInstantMsg → PostHTTP → OnHTTPReply → SendIM.
                                           SetAgentTyping wraps inference for typing indicator.
-                                          OnReceivedChat feeds ambient chat buffer.
+                                          Chat context delivered via HUD sensor pipeline —
+                                          no OnReceivedChat buffer in the Lua script.
                                           Replaces the /42 conversation path; sensor HUD
                                           remains required for environmental context.
 
@@ -172,6 +173,18 @@ interfaces/
                                           GET /setup, /setup/status, /setup/config.
                                           POST /setup/config — writes .env and
                                           agent_config.json, calls reload_agent_config().
+
+  debug_server.py                         FastAPI APIRouter for live agent inspection.
+                                          GET /debug — inline HTML debug page.
+                                          GET /debug/logs — SSE stream of all Python log
+                                            records; client-side filter by level + logger.
+                                          GET /debug/sensors — JSON snapshot of all
+                                            SensorStore regions with per-type ages.
+                                          GET /debug/prompts — last system prompt and full
+                                            exchange (user msg + reply) per user_id.
+                                          SSELogHandler bridges logging → asyncio.Queue.
+                                          Fan-out broadcaster task copies records to all
+                                          connected subscriber queues.
 ```
 
 ---
@@ -236,7 +249,9 @@ History is persisted per `(user_id, channel_id)` pair as JSON files under `data/
 
 ### Memory Consolidation
 
-`MemoryConsolidator` runs as a background task every 6 hours. When any single conversation file for a person exceeds **40 turns**, it:
+`MemoryConsolidator` runs as a background task every 6 hours. The timer is restart-resilient — startup reads `.last_consolidation` timestamp from `data/memory/` and sleeps only the remaining interval, so frequent restarts during development don't reset the 6-hour window.
+
+Consolidation triggers when the **total turns across all files** for a person exceeds **30** (previously checked max turns in a single file against a threshold of 40 — that check could never be satisfied with `MEMORY_MAX_HISTORY=20`). When triggered, it:
 
 1. Collects all conversation files across all linked platform IDs for that person
 2. Builds a combined transcript (text turns only — tool_use/tool_result blocks are stripped)
@@ -283,8 +298,7 @@ Deduplication key: `"{region}\x00{parcel}"` — the null byte ensures region and
 | Self-awareness | `_build_self_awareness_block(context)` | Always — platform-specific |
 | Platform addendum | `cfg["addenda"]["discord\|sl"]` or built-in fallback | Always |
 | Current sim | `context.sl_region` | SL only |
-| Nearby chat | `context.sl_nearby_chat[-10:]` | SL only, if non-empty |
-| Sensor context | `context.sl_sensor_context` (changed types only) | SL only, if non-empty |
+| Sensor context | `context.sl_sensor_context` via `get_changes()` | SL only, if updated since last msg |
 | Places visited | `context.sl_recent_locations` | SL only, if non-empty |
 | Additional context | `cfg["additional_context"]` | If non-empty |
 | Memory notes | `data/notes/{person_id}/memories_*.md` | If consolidated notes exist |
@@ -358,7 +372,7 @@ automation.lua — OnHTTPReply(handle, success, reply)
 Reply arrives in StonedGrits' IM window — no /42 required
 ```
 
-Sensor data travels a separate path in both cases — the HUD POSTs to `/sl/sensor` on a timer and on location changes. The `/sl/message` endpoint reads the latest snapshot from `SensorStore` at request time.
+Sensor data travels a separate path in both cases — the HUD POSTs to `/sl/sensor` on independent timers and on location changes. The `/sl/message` endpoint calls `SensorStore.get_changes()` which returns only sensor types updated since that user's last message. Chat is no longer piggybacked on `/42` or IM payloads — it is flushed via `do_chat_flush()` to `/sl/sensor` every 90 seconds and immediately before each `/42` POST.
 
 ---
 
@@ -372,7 +386,7 @@ Sensor data travels a separate path in both cases — the HUD POSTs to `/sl/sens
 | Auth mechanism | N/A | `X-SL-Secret` HTTP header | `secret` field in JSON body |
 | Unicode | Markdown supported | Normalized to ASCII | Normalized to ASCII |
 | `sl_action` tool | Not available | Available — queued, sent after reply | Available — queued, sent after reply |
-| Sensor context | Not available | Full (avatars, env, objects, clothing) | From HUD snapshots (HUD still required) |
+| Sensor context | Not available | Changed types since last msg (avatars, env, objects, chat, clothing) | From HUD snapshots via get_changes() |
 | Location history | Not available | Recent 10 parcels injected into prompt | Recent 10 parcels injected into prompt |
 | User ID prefix | `discord_` | `sl_` | `sl_` |
 | Active channel config | `DISCORD_ACTIVE_CHANNEL_IDS` in `.env` | N/A | N/A |
@@ -387,10 +401,14 @@ The application is fully async (asyncio). The Anthropic client is `AsyncAnthropi
 
 ```
 asyncio event loop
-  ├── consolidation_loop()  (every 6 hours)
-  ├── discord.py tasks      (fully async)
-  └── uvicorn               (FastAPI HTTP bridge, async)
-        └── POST /sl/message → AgentCore.handle_message() (async)
+  ├── consolidation_loop()        (restart-resilient, every 6 hours)
+  ├── debug_server._broadcaster() (SSE log fan-out, always running)
+  ├── discord.py tasks            (fully async)
+  └── uvicorn                     (FastAPI HTTP bridge, async)
+        ├── POST /sl/sensor → SensorStore.update()
+        ├── POST /sl/message → AgentCore.handle_message() (async)
+        ├── GET  /debug/logs → SSE StreamingResponse
+        └── GET  /setup/* → wizard API
 ```
 
 All three services share the same `AgentCore`, `FileMemoryStore`, and `LocationStore` instances. Concurrent writes to the same memory file are serialised by per-(user, channel) `asyncio.Lock` in `FileMemoryStore`. `LocationStore` uses a per-user `asyncio.Lock` for the same reason.

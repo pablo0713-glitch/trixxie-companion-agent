@@ -20,7 +20,7 @@ class SensorStore:
     about data freshness without being told how the pipeline works.
     """
 
-    def __init__(self, max_chat_events: int = 10) -> None:
+    def __init__(self, max_chat_events: int = 30) -> None:
         self._store: dict[str, dict[str, Any]] = {}
         self._updated_at: dict[str, dict[str, float]] = {}
         self._last_sent: dict[str, dict[str, float]] = {}  # "{region}:{user_id}" → {stype: timestamp}
@@ -31,11 +31,15 @@ class SensorStore:
             self._store[region] = {}
             self._updated_at[region] = {}
         if sensor_type == "chat":
-            events: list = self._store[region].get("chat_events", [])
-            events.append(data)
+            # data is either a single event dict or a list of strings (bulk flush from HUD)
+            events: list = self._store[region].get("chat", [])
+            if isinstance(data, list):
+                events.extend(data)
+            else:
+                events.append(data)
             if len(events) > self._max_chat:
                 events = events[-self._max_chat:]
-            self._store[region]["chat_events"] = events
+            self._store[region]["chat"] = events
         else:
             self._store[region][sensor_type] = data
         self._updated_at[region][sensor_type] = time.monotonic()

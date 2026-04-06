@@ -143,9 +143,11 @@ The HUD uses a single 30-second tick (`TICK_SECS = 30.0`). All scanning is drive
 | Startup (`state_entry`) | once | environment |
 | Region change | immediate on detection | environment + objects |
 | Parcel border crossing | immediate on detection | environment + objects |
+| Every 3 ticks | 90 s | chat flush (nearby_chat buffer → /sl/sensor) |
 | Every 5 ticks | 150 s | avatars |
 | Every 10 ticks | 300 s | objects |
 | Every 20 ticks | 600 s | environment (time-of-day drift) |
+| On /42 received | immediate | chat flush (pre-message, before POST) |
 
 ### Change detection
 
@@ -222,11 +224,13 @@ Sensor keys (`sk_*`) are fire-and-forget — responses are discarded immediately
 
 ## Chat Buffer
 
-Channel 0 messages are always appended to `nearby_chat` (up to `CHAT_BUF_SIZE = 10` lines, oldest dropped). The full 10-line buffer is attached to every `/42` message as context, giving the AI a picture of recent ambient conversation regardless of whether chat forwarding is currently enabled.
+Channel 0 messages are appended to `nearby_chat` (up to `CHAT_BUF_SIZE = 10` lines, oldest dropped). Every `CHAT_TICKS` ticks (90 s), `do_chat_flush()` POSTs the accumulated buffer to `/sl/sensor` as type `"chat"` (a JSON array of pre-escaped strings) and clears the local list.
 
-`persona.py` consumes exactly 10 lines (`sl_nearby_chat[-10:]`) — the HUD buffer and the server-side slice are intentionally kept in sync. Changing one requires changing the other.
+Additionally, when a `/42` message is received, `do_chat_flush()` is called immediately before the POST to `/sl/message`. This ensures any chat that arrived after the last scheduled flush is captured before the agent replies.
 
-The `s_chat` toggle controls whether channel 0 messages are buffered at all. When `s_chat` is FALSE, `nearby_chat` stays empty and no ambient context is attached to `/42` messages.
+Chat is no longer included in the `/42` request body — it travels entirely through the sensor pipeline and is delivered via `SensorStore.get_changes()` like all other sensor types. The server accumulates up to 30 lines (rolling, oldest dropped).
+
+The `s_chat` toggle controls whether channel 0 messages are buffered at all. When `s_chat` is FALSE, `nearby_chat` stays empty and no chat is flushed.
 
 ---
 

@@ -14,6 +14,7 @@ from core.model_adapter import create_adapter
 from core.rate_limiter import RateLimiter
 from core.tools import ToolRegistry
 from interfaces.discord_bot.bot import TrixxieBot
+from interfaces.debug_server import create_debug_router, install_log_handler
 from interfaces.setup_server import create_setup_router
 from interfaces.sl_bridge.sensor_store import SensorStore
 from interfaces.sl_bridge.server import create_sl_app
@@ -67,11 +68,37 @@ async def main() -> None:
     tasks = []
 
     # ---- Memory consolidation loop ----
+    _last_consolidation_path = Path(settings.memory_dir) / ".last_consolidation"
+
+    def _last_consolidation_time() -> float:
+        try:
+            return float(_last_consolidation_path.read_text().strip())
+        except (OSError, ValueError):
+            return 0.0
+
+    def _record_consolidation_time() -> None:
+        import time
+        _last_consolidation_path.write_text(str(time.time()))
+
     async def consolidation_loop() -> None:
+        import time
+        # On startup, check how long ago the last run was and sleep only the remainder.
+        # This prevents a 6-hour delay after every restart.
+        elapsed = time.time() - _last_consolidation_time()
+        initial_wait = max(0.0, CONSOLIDATION_INTERVAL_SECS - elapsed)
+        if initial_wait < 60:
+            initial_wait = 0.0  # overdue — run immediately
+        if initial_wait > 0:
+            logger.info(
+                "Next memory consolidation in %.0f minutes.",
+                initial_wait / 60,
+            )
+        await asyncio.sleep(initial_wait)
         while True:
-            await asyncio.sleep(CONSOLIDATION_INTERVAL_SECS)
             logger.info("Running scheduled memory consolidation...")
             await consolidator.run_all()
+            _record_consolidation_time()
+            await asyncio.sleep(CONSOLIDATION_INTERVAL_SECS)
 
     tasks.append(asyncio.create_task(consolidation_loop()))
 
@@ -85,6 +112,10 @@ async def main() -> None:
 
     # ---- Second Life HTTP bridge (always runs) ----
     sl_app = create_sl_app(agent, settings, sensor_store, location_store)
+
+    # ---- Debug page ----
+    install_log_handler(asyncio.get_running_loop())
+    sl_app.include_router(create_debug_router(sensor_store, agent))
 
     # ---- Setup wizard ----
     sl_app.include_router(create_setup_router())

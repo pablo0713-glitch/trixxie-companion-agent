@@ -171,3 +171,129 @@ This gives the agent natural awareness of data freshness without being explicitl
 | `lsl/ARCHITECTURE.md` | Timer Architecture section fully rewritten with interval table and deduplication note |
 | `main.py` | `create_adapter(settings)`; setup router + static mount |
 | `requirements.txt` | Added `openai>=1.0.0` |
+
+Phase 4 shipped on 2026-04-05. All v1 features are complete and committed.
+
+**What was built:**
+- Setup wizard at /setup — 10-step HTML/CSS/JS UI, Anthropic + Ollama support
+- ModelAdapter abstraction — AnthropicAdapter + OllamaAdapter; tested with gemma4:e4b locally
+- Config-driven persona from data/agent_config.json (generic "Aria" default template)
+- Agent self-awareness block — platform-specific, hardcoded, injected into every system prompt
+- Decoupled sensor streaming — independent LSL timers (150s avatars, 300s objects, 600s env), parcel crossing fires env+objects
+- SensorStore.get_changes() — per-user deduplication, suppresses unchanged sensor types on fast messages
+- Memory consolidation fixed: threshold now checks total turns (was max per file), restart-resilient timer via .last_consolidation file, consolidator max_tokens raised to 4096
+
+**Current model:** gemma4:e4b running locally via Ollama. Agent is online and consolidating memory.
+
+**Why:** max_tokens=768 default set for chat; consolidator had hardcoded 1024 which was too low for full note generation.
+
+**How to apply:** Next session, memory pipeline is healthy. Focus likely on Radegast C# plugin or public repo prep.
+
+---
+
+# Trixxie Carissa — Phase 4 Continued
+**Date:** 2026-04-06
+
+---
+
+## What Was Built
+
+The April 6 session extended Phase 4 with four systems: a chat sensor pipeline refactor (decoupling chat from `/42` payloads), a HUD streaming mode toggle, a live debug page at `/debug`, and targeted memory consolidation fixes.
+
+---
+
+## Chat Sensor Pipeline Refactor
+
+Chat context was previously piggybacked directly in the `/42` POST body (`nearby_chat` field). This created duplication — the same buffer was re-sent with every message regardless of whether anything new had been said.
+
+**New behavior:**
+- The HUD buffers up to 10 lines of channel 0 chat (rolling window, pre-escaped)
+- A dedicated `do_chat_flush()` function builds a JSON array and POSTs it to `/sl/sensor` with `type: "chat"`
+- Chat flushes on a timer every 90 seconds (`CHAT_TICKS = 3` × 30-second tick)
+- Chat also flushes immediately before every `/42` POST — ensuring the most current window is on the server before the agent replies
+- The `/42` POST body no longer includes a `nearby_chat` field
+- `SensorStore` stores chat under key `"chat"` (unified with `_updated_at` tracking)
+- `get_changes()` delivers chat only when it has been updated since the user's last message — no stale repetition
+
+**Files modified:**
+- `lsl/companion_bridge.lsl` — added `do_chat_flush()`, `CHAT_TICKS`, `sk_chat` key, pre-message flush
+- `interfaces/sl_bridge/sensor_store.py` — unified `"chat"` key; `update()` handles list or single-event data
+- `interfaces/sl_bridge/server.py` — removed `nearby_chat` from `SLInboundPayload`; `sl_user_id` defined before `get_changes()` call
+- `lua/trixxie_companion.lua` — removed `OnReceivedChat`, `nearby_chat` buffer, `append_chat()` function; chat is now HUD-only
+
+---
+
+## HUD Streaming Mode Toggle
+
+The HUD has two modes for sensor delivery, toggled via a new "Streaming" button in the HUD menu:
+
+| Mode | Behavior |
+|---|---|
+| **Streaming** (`s_stream = TRUE`) | All sensors fire on independent timers. Avatar scan every 150s, object scan every 300s, env every 600s. Chat flushes every 90s. The agent receives context updates passively — not tied to user messages. |
+| **Per-message** (`s_stream = FALSE`) | Avatar and env scans fire synchronously *before* each `/42` POST (burst delivery). Objects remain async (LSL `llSensor()` is callback-based). Chat still flushes before every POST. |
+
+`show_status()` reflects the current mode. The toggle persists in the `s_stream` global for the script lifetime.
+
+**Files modified:**
+- `lsl/companion_bridge.lsl` — `s_stream = TRUE` default; timer block wrapped in `if (s_stream)`; pre-`/42` burst; menu "Streaming" button; `show_status()` label
+
+---
+
+## Debug Page (`/debug`)
+
+A live agent inspection interface at `http://localhost:8080/debug`. Three tabs:
+
+| Tab | Content |
+|---|---|
+| **Logs** | Real-time Python log stream via SSE. Client-side filter by log level (DEBUG / INFO / WARNING / ERROR) and by logger name substring. Scrolls to bottom on new records. |
+| **Sensors** | JSON snapshot of all active SensorStore regions, auto-refreshed every 5 seconds. Shows per-type ages, current values. |
+| **Prompts & Exchanges** | Last system prompt and full message exchange (user message + reply text + assistant turns) per tracked user. Auto-refreshed every 10 seconds. |
+
+### SSE Log Architecture
+
+- `SSELogHandler(logging.Handler)` attaches to the root logger
+- `emit()` uses `loop.call_soon_threadsafe(queue.put_nowait, entry)` to bridge sync logging into the async event loop
+- Module-level `_broadcast_q` and `_subscribers: set[asyncio.Queue]` enable multi-tab fan-out
+- `_broadcaster()` asyncio task copies each record to all subscriber queues; removes full queues (dead connection cleanup)
+- `install_log_handler(loop)` is called from `main.py` before tasks start
+- Each SSE connection has its own subscriber queue; 15-second keepalive comment prevents browser auto-reconnect on idle streams
+
+**Files created/modified:**
+- `interfaces/debug_server.py` — NEW: `SSELogHandler`, `_broadcaster`, `create_debug_router`, inline debug HTML (~300 lines)
+- `core/agent.py` — added `_last_prompt` and `_last_exchange` dicts; `get_last_prompt()`, `get_last_exchange()`, `all_tracked_users()` public getters
+- `main.py` — `install_log_handler(loop)` + `sl_app.include_router(create_debug_router(sensor_store, agent))`
+
+---
+
+## Memory Consolidation Fixes
+
+Three bugs prevented consolidation from ever running correctly in development:
+
+| Bug | Fix |
+|---|---|
+| Threshold checked `max turns in a single file` against 40 — impossible with `MEMORY_MAX_HISTORY=20` | Changed to check **total turns across all files** against threshold **30** |
+| Timer reset on every restart — frequent restarts during development prevented completion | Timer is now restart-resilient: startup reads `.last_consolidation` timestamp from disk and sleeps only the *remaining* interval |
+| `max_tokens=1024` in `_ask_model()` — too low for a full memory note | Raised to **4096** |
+
+**Files modified:**
+- `memory/consolidator.py` — `CONSOLIDATION_THRESHOLD = 30`; total-turns check; `max_tokens=4096`
+- `main.py` — consolidation loop uses `.last_consolidation` file for restart-resilient timing
+
+---
+
+## Files Modified or Created (April 6)
+
+| File | Change |
+|---|---|
+| `lsl/companion_bridge.lsl` | Chat flush pipeline; `s_stream` toggle; `CHAT_TICKS`; pre-message burst mode |
+| `interfaces/sl_bridge/sensor_store.py` | Unified `"chat"` key; chat list/single-event handling |
+| `interfaces/sl_bridge/server.py` | Removed `nearby_chat`; `sl_user_id` before `get_changes()` |
+| `lua/trixxie_companion.lua` | Removed `OnReceivedChat`, chat buffer, `append_chat()` |
+| `interfaces/debug_server.py` | NEW — SSE log stream, sensor snapshot, prompt/exchange viewer |
+| `core/agent.py` | `_last_prompt`, `_last_exchange`, three public getters; `import time` |
+| `memory/consolidator.py` | Total-turns threshold (30); restart-resilient timer; `max_tokens=4096` |
+| `main.py` | `install_log_handler()`; debug router; restart-resilient consolidation loop |
+| `core/persona.py` | `_age_label()` helper; sensor context reads `"chat"` key (was `"chat_events"`) |
+| `lsl/ARCHITECTURE.md` | Timer table: `CHAT_TICKS` row; "On /42 received" row; Chat Buffer section rewritten |
+| `ARCHITECTURE.md` | Component map, memory consolidation, system prompt table, threading diagram, platform table, sensor data flow — all updated |
+| `README.md` | Project layout updated; Debug Page section added |

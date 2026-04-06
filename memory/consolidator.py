@@ -14,7 +14,7 @@ from memory.schemas import ConversationFile
 
 logger = logging.getLogger(__name__)
 
-CONSOLIDATION_THRESHOLD = 40
+CONSOLIDATION_THRESHOLD = 30   # total turns across all files for a person
 KEEP_TURNS_AFTER = 10
 
 
@@ -60,14 +60,12 @@ class MemoryConsolidator:
         if not all_convs:
             return
 
-        max_turns_in_file = max(len(c.turns) for c in all_convs)
-        if max_turns_in_file < self._threshold:
-            return
-
         total = sum(len(c.turns) for c in all_convs)
+        if total < self._threshold:
+            return
         logger.info(
-            "Consolidating memory for '%s': %d files, %d total turns",
-            person_id, len(all_convs), total,
+            "Consolidating memory for '%s': %d files, %d total turns (threshold %d)",
+            person_id, len(all_convs), total, self._threshold,
         )
 
         await self._consolidate(person_id, all_convs)
@@ -125,7 +123,7 @@ class MemoryConsolidator:
         return await self._adapter.create_simple(
             system="",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=1024,
+            max_tokens=4096,
         )
 
 

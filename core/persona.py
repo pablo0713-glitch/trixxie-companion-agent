@@ -114,7 +114,6 @@ class MessageContext:
     guild_id: int | None = None
     sl_region: str | None = None
     sl_grid: str = "sl"
-    sl_nearby_chat: list[str] = field(default_factory=list)
     sl_sensor_context: dict = field(default_factory=dict)
     sl_recent_locations: list[dict] = field(default_factory=list)
 
@@ -217,9 +216,6 @@ def build_system_prompt(
         parts.append(addenda.get("sl") or SL_ADDENDUM)
         if context.sl_region:
             parts.append(f"Current sim: {context.sl_region}")
-        if context.sl_nearby_chat:
-            recent = "\n".join(context.sl_nearby_chat[-10:])
-            parts.append(f"## Nearby Chat (recent local chat in the sim)\n{recent}")
         if context.sl_sensor_context:
             sensor_block = _format_sensor_context(context.sl_sensor_context)
             if sensor_block:
@@ -311,11 +307,13 @@ def _format_sensor_context(ctx: dict) -> str:
             item_str = ", ".join(f"{i.get('item', '?')} by {i.get('creator', '?')}" for i in items)
             lines.append(f"Scan of {clothing.get('target', '?')}{_age_label(ages, 'clothing')}: {item_str}")
 
-    chat_events = ctx.get("chat_events")
+    chat_events = ctx.get("chat")
     if chat_events:
-        lines.append("Notable chat events:")
-        for ev in chat_events[-5:]:
-            if isinstance(ev, dict):
+        lines.append(f"Nearby chat{_age_label(ages, 'chat')}:")
+        for ev in chat_events[-10:]:
+            if isinstance(ev, str):
+                lines.append(f"  {ev}")
+            elif isinstance(ev, dict):
                 lines.append(f"  [{ev.get('speaker', '?')}] {ev.get('message', '')}")
 
     return "\n".join(lines) if len(lines) > 1 else ""
