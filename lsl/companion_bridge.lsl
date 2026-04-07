@@ -18,12 +18,14 @@ string  GRID           = "sl";      // "sl" for Second Life, "opensim" for OpenS
 integer LISTEN_CHANNEL = 42;
 integer UI_CHANNEL     = -7654321;  // private dialog channel
 integer CHAT_BUF_SIZE  = 10;        // ambient chat lines to buffer
+string  TRIGGER_NAME   = "Trixxie"; // name that triggers a local chat response
 
 // --- Sensor toggles ---
 integer s_avatars = TRUE;
 integer s_chat    = TRUE;
 integer s_env     = TRUE;
 integer s_objects = TRUE;
+integer s_rlv     = TRUE;
 // s_stream = TRUE  → sensors POST on independent timers (continuous)
 // s_stream = FALSE → sensors POST only when a /42 message is sent
 integer s_stream  = TRUE;
@@ -38,29 +40,44 @@ integer AV_TICKS   = 5;    // avatar scan every  5 ticks =  150s
 integer OBJ_TICKS  = 10;   // object scan every 10 ticks =  300s
 integer ENV_TICKS  = 20;   // env scan every    20 ticks =  600s (time-of-day drift)
 integer CHAT_TICKS = 3;    // chat flush every   3 ticks =   90s
+integer RLV_TICKS  = 1;    // RLV state every    1 tick  =   30s
 
 // --- Region/parcel tracking (env scan fires on region OR parcel change) ---
-string  last_region = "";
-string  last_parcel = "";
+string  last_region  = "";
+string  last_parcel  = "";
+string  sim_rating   = "";   // cached from llRequestSimulatorData / DATA_SIM_RATING
+key     sk_sim_query = NULL_KEY;
 
 // --- HTTP keys: reply flow ---
-key reply_http   = NULL_KEY;
-key reply_sender = NULL_KEY;
+key reply_http    = NULL_KEY;   // channel 42 in-flight request
+key reply_sender  = NULL_KEY;
+key reply_lc_http = NULL_KEY;   // local chat in-flight request
+key reply_lc_id   = NULL_KEY;   // local chat speaker key (for say context)
 
 // --- HTTP keys: sensor posts (fire and forget) ---
 key sk_av  = NULL_KEY;
 key sk_env = NULL_KEY;
 key sk_obj = NULL_KEY;
 key sk_clo = NULL_KEY;
+key sk_rlv = NULL_KEY;
 
 // --- Ambient chat buffer (sent as context with /42 messages) ---
 list nearby_chat = [];
 
 // --- Clothing scan state machine ---
 // 0=idle  1=find-agent (AGENT sweep)  2=find-attachments (PASSIVE|ACTIVE sweep)
+// 3=object proximity  4=RLV sitting-object resolution
 integer scan_mode  = 0;
 key     clo_target = NULL_KEY;
 string  clo_name   = "";
+
+// --- RLV state (persisted across async sitting-object resolution) ---
+integer rlv_sitting    = FALSE;
+integer rlv_on_object  = FALSE;
+integer rlv_autopilot  = FALSE;
+integer rlv_flying     = FALSE;
+integer rlv_teleported = FALSE;
+vector  last_rlv_pos   = ZERO_VECTOR;
 
 
 // ================================================================
@@ -105,6 +122,34 @@ send_chunked(key target, string text)
     }
     if (text != "")
         llInstantMessage(target, text);
+}
+
+// Deliver a reply to local chat (channel 0), chunked at sentence boundaries.
+say_chunked(string text)
+{
+    integer limit = 1000;
+    while (llStringLength(text) > limit)
+    {
+        integer cut = limit;
+        integer i;
+        for (i = limit - 1; i > limit - 200 && i >= 0; i--)
+        {
+            string c  = llGetSubString(text, i,     i    );
+            string nx = llGetSubString(text, i + 1, i + 1);
+            if ((c == "." || c == "!" || c == "?") &&
+                (nx == " " || nx == "\n" || nx == ""))
+            {
+                cut = i + 1;
+                i   = -1;
+            }
+        }
+        llSay(0, llGetSubString(text, 0, cut - 1));
+        text = llGetSubString(text, cut, -1);
+        if (llGetSubString(text, 0, 0) == " ")
+            text = llGetSubString(text, 1, -1);
+    }
+    if (text != "")
+        llSay(0, text);
 }
 
 // Fire-and-forget POST to /sl/sensor
@@ -200,16 +245,22 @@ do_env_scan()
     string parcel      = llList2String(pd, 0);
     string parcel_desc = llList2String(pd, 1);
     pd = [];
+    // Strip carriage returns (char 13) — SL text fields use \r\n line endings.
+    // LSL has no \r escape so we use llChar(13). Raw CR in a JSON string is
+    // invalid and causes the server to reject the entire POST with a 422.
+    parcel_desc = llReplaceSubString(parcel_desc, llChar(13), "", 0);
     if (llStringLength(parcel_desc) > 400)
         parcel_desc = llGetSubString(parcel_desc, 0, 399);
     integer nav = llGetRegionAgentCount();
-    string tod      = llGetEnv("time_of_day");
-    string sun      = llGetEnv("sun_altitude");
+    string tod = llGetEnv("time_of_day");
+    string sun = llGetEnv("sun_altitude");
+    if (sun == "") sun = "0.0";   // llGetEnv returns "" in some regions/EEP environments
 
     string data = "{";
     data += "\"region\":\"" + json_s(region) + "\",";
     data += "\"parcel\":\"" + json_s(parcel) + "\",";
     data += "\"parcel_desc\":\"" + json_s(parcel_desc) + "\",";
+    data += "\"rating\":\"" + sim_rating + "\",";
     data += "\"time_of_day\":\"" + json_s(tod) + "\",";
     data += "\"sun_altitude\":" + sun + ",";
     data += "\"avatar_count\":" + (string)nav;
@@ -259,6 +310,61 @@ do_object_scan()
 
 
 // ================================================================
+// Sensor: RLV / Avatar State
+// Detects movement effects (force-sit, autopilot/leash, teleport).
+// When sitting on an object, triggers a close-range llSensor sweep
+// (scan_mode 4) to resolve the object name before posting.
+// ================================================================
+
+do_rlv_scan()
+{
+    if (!s_rlv) return;
+
+    integer info  = llGetAgentInfo(llGetOwner());
+    rlv_sitting   = (info & AGENT_SITTING)   != 0;
+    rlv_on_object = (info & AGENT_ON_OBJECT) != 0;
+    rlv_autopilot = (info & AGENT_AUTOPILOT) != 0;
+    rlv_flying    = (info & AGENT_FLYING)    != 0;
+
+    vector cur_pos = llGetPos();
+    rlv_teleported = (last_rlv_pos != ZERO_VECTOR
+                      && llVecDist(cur_pos, last_rlv_pos) > 10.0);
+    last_rlv_pos   = cur_pos;
+
+    if (rlv_on_object)
+    {
+        // Async: resolve the object name via a 2m sensor sweep
+        scan_mode = 4;
+        llSensor("", NULL_KEY, PASSIVE | ACTIVE, 2.0, PI);
+    }
+    else
+    {
+        post_rlv_data("");
+    }
+}
+
+post_rlv_data(string sitting_on)
+{
+    vector pos = llGetPos();
+    float  px  = (float)llRound(pos.x * 10) / 10.0;
+    float  py  = (float)llRound(pos.y * 10) / 10.0;
+    float  pz  = (float)llRound(pos.z * 10) / 10.0;
+    string data = "{"
+        + "\"sitting\":"      + (string)rlv_sitting    + ","
+        + "\"on_object\":"    + (string)rlv_on_object  + ","
+        + "\"sitting_on\":\"" + json_s(sitting_on)     + "\","
+        + "\"autopilot\":"    + (string)rlv_autopilot  + ","
+        + "\"flying\":"       + (string)rlv_flying     + ","
+        + "\"teleported\":"   + (string)rlv_teleported + ","
+        + "\"position\":["    + (string)px + ","
+                              + (string)py + ","
+                              + (string)pz + "]"
+        + "}";
+    sk_rlv = sensor_post("rlv", data);
+}
+
+
+// ================================================================
 // Sensor: Clothing Scanner (two-step: find agent, then attachments)
 // ================================================================
 
@@ -282,9 +388,10 @@ show_menu()
         + " Ch:" + (string)s_chat
         + " En:" + (string)s_env
         + " Ob:" + (string)s_objects
+        + " RLV:" + (string)s_rlv
         + " " + mode,
         ["Avatars", "Chat", "Environment", "Objects",
-         "Streaming", "Scan Target", "Status", "Close"],
+         "RLV", "Streaming", "Scan Target", "Status", "Close"],
         UI_CHANNEL);
 }
 
@@ -298,6 +405,7 @@ show_status()
         + "Chat    : " + (string)s_chat    + "  [last 10 messages]\n"
         + "Env     : " + (string)s_env     + "\n"
         + "Objects : " + (string)s_objects + "\n"
+        + "RLV     : " + (string)s_rlv     + "\n"
         + "Mode    : " + mode + "\n"
         + "Region  : " + llGetRegionName()
     );
@@ -363,10 +471,17 @@ process_object_hits(integer num)
         if (!(llDetectedType(idx) & 1))
         {
             float rd = (float)llRound(llVecDist(llDetectedPos(idx), llGetPos()) * 10) / 10.0;
+            list det = llGetObjectDetails(llDetectedKey(idx), [OBJECT_DESC, OBJECT_OWNER]);
+            string desc  = llReplaceSubString(llList2String(det, 0), llChar(13), "", 0);
+            string owner = llKey2Name(llList2Key(det, 1));
+            if (llStringLength(desc) > 200)
+                desc = llGetSubString(desc, 0, 199);
             if (count > 0) arr += ",";
             arr += "{\"name\":\"" + json_s(llDetectedName(idx))
                  + "\",\"distance\":" + (string)rd
-                 + ",\"scripted\":" + (string)((llDetectedType(idx) & 2) != 0) + "}";
+                 + ",\"scripted\":" + (string)((llDetectedType(idx) & 2) != 0)
+                 + ",\"description\":\"" + json_s(desc)
+                 + "\",\"owner\":\"" + json_s(owner) + "\"}";
             count++;
         }
     }
@@ -390,8 +505,9 @@ default
         llListen(UI_CHANNEL, "", llGetOwner(), "");
         llSetTimerEvent(TICK_SECS);
 
-        last_region = llGetRegionName();
-        last_parcel = llList2String(llGetParcelDetails(llGetPos(), [PARCEL_DETAILS_NAME]), 0);
+        last_region  = llGetRegionName();
+        last_parcel  = llList2String(llGetParcelDetails(llGetPos(), [PARCEL_DETAILS_NAME]), 0);
+        sk_sim_query = llRequestSimulatorData(last_region, DATA_SIM_RATING);
         do_env_scan();
         llOwnerSay("Trixxie Sensory HUD active. Touch to open controls.");
     }
@@ -410,20 +526,23 @@ default
         string r = llGetRegionName();
         if (r != last_region)
         {
-            last_region = r;
-            last_parcel = "";   // cleared so the env scan below sets it fresh
+            last_region  = r;
+            last_parcel  = "";   // cleared so the env scan below sets it fresh
+            sim_rating   = "";   // will refresh via dataserver
+            sk_sim_query = llRequestSimulatorData(r, DATA_SIM_RATING);
             tick = 0;
             do_env_scan();
             if (s_objects) do_object_scan();
             return;
         }
 
-        // Parcel border crossing → re-scan environment + objects
+        // Parcel border crossing → re-scan environment + objects + RLV state
         string p = llList2String(llGetParcelDetails(llGetPos(), [PARCEL_DETAILS_NAME]), 0);
         if (p != last_parcel)
         {
             do_env_scan();          // sets last_parcel inside do_env_scan
             if (s_objects) do_object_scan();
+            do_rlv_scan();
         }
 
         // Interval sensor posts — only in streaming mode
@@ -440,23 +559,51 @@ default
 
             if (s_chat && (tick % CHAT_TICKS) == 0)
                 do_chat_flush();
+
+            if (s_rlv && (tick % RLV_TICKS) == 0)
+                do_rlv_scan();
         }
     }
 
     listen(integer channel, string name, key id, string message)
     {
-        // ── Local chat: buffer all speakers, sent as context with /42 messages ──
+        // ── Local chat: buffer + name-trigger response ──
         if (channel == 0)
         {
+            // Always buffer for sensor context
             if (s_chat)
             {
                 string raw = name + ": " + message;
                 if (llStringLength(raw) > 200)
                     raw = llGetSubString(raw, 0, 199);
-                string entry = json_s(raw);
-                nearby_chat += [entry];
+                nearby_chat += [json_s(raw)];
                 if (llGetListLength(nearby_chat) > CHAT_BUF_SIZE)
                     nearby_chat = llList2List(nearby_chat, -CHAT_BUF_SIZE, -1);
+            }
+
+            // Name trigger: respond via llSay if TRIGGER_NAME appears in message
+            // and no local chat reply is already in flight.
+            if (id != llGetOwner()
+                && reply_lc_http == NULL_KEY
+                && llSubStringIndex(llToLower(message), llToLower(TRIGGER_NAME)) != -1)
+            {
+                reply_lc_id = id;
+                string body = "{"
+                    + "\"user_id\":\""      + (string)id               + "\","
+                    + "\"display_name\":\"" + json_s(name)              + "\","
+                    + "\"message\":\""      + json_s(message)           + "\","
+                    + "\"region\":\""       + json_s(llGetRegionName()) + "\","
+                    + "\"channel\":0,"
+                    + "\"grid\":\""         + GRID                      + "\""
+                    + "}";
+                list p = [
+                    HTTP_METHOD, "POST",
+                    HTTP_MIMETYPE, "application/json",
+                    HTTP_VERIFY_CERT, TRUE
+                ];
+                if (SECRET != "")
+                    p += [HTTP_CUSTOM_HEADER, "X-SL-Secret", SECRET];
+                reply_lc_http = llHTTPRequest(SERVER_URL + "/sl/message", p, body);
             }
             return;
         }
@@ -473,6 +620,7 @@ default
                 if (s_objects) do_object_scan();
                 show_menu();
             }
+            else if (message == "RLV")         { s_rlv     = !s_rlv;     show_menu(); }
             else if (message == "Streaming")   { s_stream  = !s_stream;  show_menu(); }
             else if (message == "Scan Target") { do_clothing_scan(); }
             else if (message == "Status")      { show_status(); }
@@ -500,6 +648,7 @@ default
             {
                 do_avatar_scan();
                 do_env_scan();
+                do_rlv_scan();
             }
 
             string body = "{"
@@ -559,6 +708,16 @@ default
         {
             scan_mode = 0;
             process_object_hits(num);
+            return;
+        }
+
+        // RLV sitting-object resolution
+        if (scan_mode == 4)
+        {
+            scan_mode = 0;
+            string obj_name = "";
+            if (num > 0) obj_name = llDetectedName(0);
+            post_rlv_data(obj_name);
         }
     }
 
@@ -566,9 +725,24 @@ default
     {
         if (scan_mode == 1 || scan_mode == 2)
             llOwnerSay("Nothing detected in range.");
+        if (scan_mode == 4)
+            post_rlv_data("");   // sitting but nothing in 2m — post without object name
         scan_mode  = 0;
         clo_target = NULL_KEY;
         clo_name   = "";
+    }
+
+    // ── Async data callbacks ──
+    dataserver(key query, string data)
+    {
+        if (query == sk_sim_query)
+        {
+            sk_sim_query = NULL_KEY;
+            if      (data == "PG")     sim_rating = "General";
+            else if (data == "MATURE") sim_rating = "Moderate";
+            else if (data == "ADULT")  sim_rating = "Adult";
+            else                       sim_rating = data;
+        }
     }
 
     // ── HTTP responses ──
@@ -580,6 +754,21 @@ default
         if (req == sk_obj)  { sk_obj  = NULL_KEY; return; }
         if (req == sk_clo)  { sk_clo  = NULL_KEY; return; }
         if (req == sk_chat) { sk_chat = NULL_KEY; return; }
+        if (req == sk_rlv)  { sk_rlv  = NULL_KEY; return; }
+
+        // Local chat name-trigger reply
+        if (req == reply_lc_http)
+        {
+            reply_lc_http = NULL_KEY;
+            reply_lc_id   = NULL_KEY;
+            if (status == 200)
+            {
+                string reply = llJsonGetValue(body, ["reply"]);
+                if (reply != JSON_INVALID && reply != "")
+                    say_chunked(reply);
+            }
+            return;
+        }
 
         // Reply flow
         if (req != reply_http) return;

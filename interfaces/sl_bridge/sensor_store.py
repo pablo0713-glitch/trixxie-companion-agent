@@ -52,13 +52,19 @@ class SensorStore:
         snap["_ages"] = {k: int(now - t) for k, t in ages.items()}
         return snap
 
+    # Sensor types that are always injected into the prompt regardless of
+    # whether they changed since the last message.  These represent stable
+    # context (location, avatar state) the agent needs on every turn.
+    _ALWAYS_INCLUDE = frozenset({"environment", "rlv"})
+
     def get_changes(self, region: str, user_id: str) -> dict[str, Any]:
-        """Return only sensor types updated since this user's last message.
+        """Return sensor types updated since this user's last message, plus
+        any types in _ALWAYS_INCLUDE that exist in the store.
 
         On first call for a user, returns everything. On subsequent calls,
-        returns only types whose data changed since the previous call.
-        This prevents identical sensor context from being injected on every
-        fast consecutive message.
+        fast-changing types (avatars, objects, chat, clothing) are suppressed
+        if unchanged, but environment and rlv are always included so the agent
+        always knows where it is and what state it's in.
         """
         store = self._store.get(region, {})
         region_ages = self._updated_at.get(region, {})
@@ -72,7 +78,7 @@ class SensorStore:
         for stype, data in store.items():
             updated = region_ages.get(stype, 0.0)
             prev = last_seen.get(stype, -1.0)
-            if updated > prev:
+            if updated > prev or stype in self._ALWAYS_INCLUDE:
                 snap[stype] = data
                 ages[stype] = int(now - updated)
 

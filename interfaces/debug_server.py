@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 if TYPE_CHECKING:
@@ -74,20 +74,25 @@ def create_debug_router(sensor_store: "SensorStore", agent_core: "AgentCore") ->
         return HTMLResponse(_DEBUG_HTML)
 
     @router.get("/debug/logs")
-    async def stream_logs(request: Request) -> StreamingResponse:
-        sub_q: asyncio.Queue = asyncio.Queue(maxsize=200)
+    async def stream_logs() -> StreamingResponse:
+        sub_q: asyncio.Queue = asyncio.Queue(maxsize=500)
         _subscribers.add(sub_q)
 
         async def event_gen():
+            # Yield a comment immediately so the browser sees headers + first byte
+            # and fires EventSource.onopen right away.
+            yield ": connected\n\n"
             try:
                 while True:
-                    if await request.is_disconnected():
-                        break
-                    try:
-                        record = await asyncio.wait_for(sub_q.get(), timeout=15.0)
-                        yield f"data: {json.dumps(record)}\n\n"
-                    except asyncio.TimeoutError:
-                        yield ": keepalive\n\n"
+                    await asyncio.sleep(0.25)
+                    while not sub_q.empty():
+                        try:
+                            record = sub_q.get_nowait()
+                            yield f"data: {json.dumps(record)}\n\n"
+                        except asyncio.QueueEmpty:
+                            break
+            except asyncio.CancelledError:
+                pass
             finally:
                 _subscribers.discard(sub_q)
 
@@ -111,8 +116,18 @@ def create_debug_router(sensor_store: "SensorStore", agent_core: "AgentCore") ->
         result = {}
         for uid in agent_core.all_tracked_users():
             exchange = agent_core.get_last_exchange(uid)
+            messages_json = None
+            messages_chars = 0
+            if exchange and exchange.get("messages"):
+                try:
+                    messages_json = json.dumps(exchange["messages"], indent=2, default=str)
+                    messages_chars = len(messages_json)
+                except Exception:
+                    messages_json = "(serialization error)"
+            prompt_text = agent_core.get_last_prompt(uid) or ""
             result[uid] = {
-                "last_prompt": agent_core.get_last_prompt(uid),
+                "last_prompt": prompt_text,
+                "prompt_chars": len(prompt_text),
                 "last_exchange": {
                     "ts": exchange.get("ts"),
                     "ts_fmt": datetime.fromtimestamp(exchange["ts"], tz=timezone.utc)
@@ -121,6 +136,9 @@ def create_debug_router(sensor_store: "SensorStore", agent_core: "AgentCore") ->
                     "user_message": exchange.get("user_message"),
                     "reply_text": exchange.get("reply_text"),
                     "assistant_turns": exchange.get("assistant_turns"),
+                    "messages_json": messages_json,
+                    "messages_chars": messages_chars,
+                    "messages_turns": len(exchange.get("messages", [])) if exchange else 0,
                 } if exchange else None,
             }
         return JSONResponse(result)
@@ -169,13 +187,19 @@ _DEBUG_HTML = """<!DOCTYPE html>
   .log-line .lv.ERROR { color: var(--error); }
   .log-line .lv.CRITICAL { color: var(--critical); }
   .log-line .ln { color: var(--dim); }
-  .sensor-grid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; align-content: start; }
+  .sensor-split { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; overflow: hidden; }
+  .sensor-raw { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; align-content: start; }
+  .sensor-grid { display: flex; flex-direction: column; gap: 12px; }
   .sensor-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
   .sensor-card h3 { color: var(--accent); font-size: 12px; margin-bottom: 8px; }
   .sensor-type { margin-bottom: 6px; }
   .sensor-type .stype { color: var(--info); font-size: 11px; }
   .sensor-type .age { color: var(--dim); font-size: 11px; margin-left: 8px; }
   .sensor-data { color: var(--dim); font-size: 11px; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+  .sensor-text { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-y: auto; white-space: pre; font-size: 12px; line-height: 1.6; color: var(--text); }
+  .sensor-text .sh { color: var(--accent); font-weight: bold; }
+  .sensor-text .sf { color: var(--dim); }
+  .sensor-text .sv { color: var(--text); }
   .prompt-layout { flex: 1; display: grid; grid-template-columns: 220px 1fr; gap: 12px; overflow: hidden; }
   .user-list { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow-y: auto; }
   .user-item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 12px; }
@@ -183,7 +207,7 @@ _DEBUG_HTML = """<!DOCTYPE html>
   .user-item .uid { color: var(--dim); font-size: 10px; display: block; margin-top: 2px; }
   .prompt-detail { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
   .prompt-meta { font-size: 11px; color: var(--dim); flex-shrink: 0; }
-  .prompt-sections { flex: 1; display: grid; grid-template-rows: 1fr 1fr; gap: 8px; overflow: hidden; }
+  .prompt-sections { flex: 1; display: grid; grid-template-rows: 1fr 2fr 1fr; gap: 8px; overflow: hidden; }
   .prompt-section { display: flex; flex-direction: column; overflow: hidden; }
   .prompt-section h4 { font-size: 11px; color: var(--dim); margin-bottom: 4px; flex-shrink: 0; }
   .prompt-pre { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 8px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; font-size: 11px; color: var(--text); }
@@ -234,7 +258,12 @@ _DEBUG_HTML = """<!DOCTYPE html>
     <button onclick="refreshSensors()">Refresh</button>
     <span style="color:var(--dim);font-size:11px" id="sensor-refresh-time"></span>
   </div>
-  <div class="sensor-grid" id="sensor-grid"><div class="empty">No sensor data yet.</div></div>
+  <div class="sensor-split">
+    <div class="sensor-raw">
+      <div class="sensor-grid" id="sensor-grid"><div class="empty">No sensor data yet.</div></div>
+    </div>
+    <div class="sensor-text" id="sensor-text">No sensor data yet.</div>
+  </div>
 </div>
 
 <!-- PROMPTS -->
@@ -278,8 +307,10 @@ es.onopen = () => {
     '● <span id="connected">connected</span>';
 };
 es.onerror = () => {
-  document.getElementById('log-status').innerHTML =
-    '● <span id="disconnected">disconnected</span>';
+  if (es.readyState === EventSource.CLOSED) {
+    document.getElementById('log-status').innerHTML =
+      '● <span id="disconnected">disconnected</span>';
+  }
 };
 es.onmessage = (e) => {
   const rec = JSON.parse(e.data);
@@ -327,8 +358,14 @@ async function refreshSensors() {
   const data = await fetch('/debug/sensors').then(r => r.json()).catch(() => null);
   if (!data) return;
   const grid = document.getElementById('sensor-grid');
+  const textEl = document.getElementById('sensor-text');
   const regions = Object.keys(data);
-  if (!regions.length) { grid.innerHTML = '<div class="empty">No sensor data yet.</div>'; return; }
+  if (!regions.length) {
+    grid.innerHTML = '<div class="empty">No sensor data yet.</div>';
+    textEl.textContent = 'No sensor data yet.';
+    return;
+  }
+  // Raw JSON cards
   grid.innerHTML = regions.map(region => {
     const snap = data[region];
     const types = Object.keys(snap.data).filter(k => !k.startsWith('_'));
@@ -341,9 +378,97 @@ async function refreshSensors() {
     }).join('');
     return '<div class="sensor-card"><h3>' + esc(region) + '</h3>' + (cards || '<span style="color:var(--dim);font-size:11px">empty</span>') + '</div>';
   }).join('');
+  // Formatted text panel
+  textEl.innerHTML = formatSensorsHTML(data);
   const now = new Date().toLocaleTimeString();
   document.getElementById('sensor-refresh-time').textContent = 'last refresh: ' + now;
   document.getElementById('sensor-age').textContent = 'sensors: ' + now;
+}
+
+function field(label, value) {
+  if (value === undefined || value === null || value === '') value = '—';
+  return '<span class="sf">' + esc(label) + '</span><span class="sv">' + esc(String(value)) + '</span>\\n';
+}
+
+function formatSensorsHTML(data) {
+  let html = '';
+  for (const region of Object.keys(data)) {
+    const snap = data[region];
+    html += '<span class="sh">Region: ' + esc(region) + '</span>\\n\\n';
+
+    const objs = snap.data['objects'];
+    if (Array.isArray(objs) && objs.length) {
+      const age = snap.ages['objects'] !== undefined ? ' [' + fmtAge(snap.ages['objects']) + ']' : '';
+      html += '<span class="sh">Objects' + esc(age) + '</span>\\n\\n';
+      for (const o of objs) {
+        html += field('Name:        ', o.name);
+        html += field('Description: ', o.description);
+        html += field('Owner:       ', o.owner);
+        html += field('Distance:    ', o.distance !== undefined ? o.distance + 'm' : undefined);
+        if (o.scripted) html += '<span class="sf">             </span><span class="sv">[scripted]</span>\\n';
+        html += '\\n';
+      }
+    }
+
+    const avs = snap.data['avatars'];
+    if (Array.isArray(avs) && avs.length) {
+      const age = snap.ages['avatars'] !== undefined ? ' [' + fmtAge(snap.ages['avatars']) + ']' : '';
+      html += '<span class="sh">Avatars' + esc(age) + '</span>\\n\\n';
+      for (const a of avs) {
+        html += field('Name:     ', a.name);
+        html += field('Distance: ', a.distance !== undefined ? a.distance + 'm' : undefined);
+        html += '\\n';
+      }
+    }
+
+    const env = snap.data['environment'];
+    if (env && typeof env === 'object') {
+      const age = snap.ages['environment'] !== undefined ? ' [' + fmtAge(snap.ages['environment']) + ']' : '';
+      html += '<span class="sh">Environment' + esc(age) + '</span>\\n\\n';
+      html += field('Parcel:    ', env.parcel);
+      if (env.rating) html += field('Rating:    ', env.rating);
+      html += field('Desc:      ', env.parcel_desc);
+      html += field('Time:      ', env.time_of_day);
+      html += field('Sun:       ', env.sun_altitude);
+      html += field('Avatars:   ', env.avatar_count);
+      html += '\\n';
+    }
+
+    const chat = snap.data['chat'];
+    if (Array.isArray(chat) && chat.length) {
+      const age = snap.ages['chat'] !== undefined ? ' [' + fmtAge(snap.ages['chat']) + ']' : '';
+      html += '<span class="sh">Nearby Chat' + esc(age) + '</span>\\n\\n';
+      for (const line of chat) html += '<span class="sv">' + esc(line) + '</span>\\n';
+      html += '\\n';
+    }
+
+    const rlv = snap.data['rlv'];
+    if (rlv && typeof rlv === 'object') {
+      const age = snap.ages['rlv'] !== undefined ? ' [' + fmtAge(snap.ages['rlv']) + ']' : '';
+      html += '<span class="sh">Avatar State (RLV)' + esc(age) + '</span>\\n\\n';
+      html += field('Sitting:     ', rlv.sitting ? 'yes' : 'no');
+      if (rlv.on_object) html += field('Sitting on:  ', rlv.sitting_on || '(unknown)');
+      html += field('Autopilot:   ', rlv.autopilot ? 'yes — possibly leashed' : 'no');
+      html += field('Flying:      ', rlv.flying ? 'yes' : 'no');
+      html += field('Teleported:  ', rlv.teleported ? 'yes (this tick)' : 'no');
+      if (rlv.position) html += field('Position:    ', rlv.position.join(', '));
+      html += '\\n';
+    }
+
+    const clo = snap.data['clothing'];
+    if (clo && typeof clo === 'object') {
+      const age = snap.ages['clothing'] !== undefined ? ' [' + fmtAge(snap.ages['clothing']) + ']' : '';
+      html += '<span class="sh">Clothing' + esc(age) + '</span>\\n\\n';
+      html += field('Target: ', clo.target);
+      if (Array.isArray(clo.items)) {
+        for (const item of clo.items) {
+          html += '<span class="sv">  ' + esc(item.item) + ' — by ' + esc(item.creator) + '</span>\\n';
+        }
+      }
+      html += '\\n';
+    }
+  }
+  return html || 'No data.';
 }
 
 // ── Prompts & Exchanges ──
@@ -363,7 +488,7 @@ async function refreshPrompts() {
     const badgeCls = platform === 'discord' ? 'discord' : 'sl';
     const label = uid.replace(/^(discord|sl)_/, '');
     return '<div class="user-item' + (uid === selectedUser ? ' active' : '') +
-           '" onclick="selectUser(' + JSON.stringify(uid) + ')">' +
+           '" data-uid="' + esc(uid) + '" onclick="selectUser(this)">' +
            '<span class="badge ' + badgeCls + '">' + platform + '</span>' +
            esc(label) +
            (ex ? '<span class="uid">' + esc(ex.ts_fmt) + '</span>' : '') +
@@ -373,24 +498,40 @@ async function refreshPrompts() {
   document.getElementById('prompt-refresh-time').textContent = 'last refresh: ' + new Date().toLocaleTimeString();
 }
 
-function selectUser(uid) {
+function selectUser(el) {
+  const uid = el.dataset.uid;
   selectedUser = uid;
-  document.querySelectorAll('.user-item').forEach(el => el.classList.remove('active'));
-  event.currentTarget.classList.add('active');
+  document.querySelectorAll('.user-item').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
   renderPromptDetail(uid);
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return n + ' chars';
+  return (n / 1024).toFixed(1) + 'k chars';
 }
 
 function renderPromptDetail(uid) {
   const d = promptData[uid];
   if (!d) return;
   const ex = d.last_exchange;
+  const promptChars = d.prompt_chars || 0;
+  const msgsChars = ex ? (ex.messages_chars || 0) : 0;
+  const msgsTurns = ex ? (ex.messages_turns || 0) : 0;
+  const totalChars = promptChars + msgsChars;
   const detail = document.getElementById('prompt-detail');
   detail.innerHTML =
     '<div class="prompt-meta">' +
-    (ex ? ex.ts_fmt + ' &nbsp;|&nbsp; ' + ex.platform : 'No exchange yet') + '</div>' +
+    (ex ? ex.ts_fmt + ' &nbsp;|&nbsp; ' + ex.platform : 'No exchange yet') +
+    (totalChars ? ' &nbsp;|&nbsp; <span style="color:var(--accent)">~' + fmtBytes(totalChars) + ' total</span>' : '') +
+    '</div>' +
     '<div class="prompt-sections">' +
-    '<div class="prompt-section"><h4>System Prompt</h4>' +
+    '<div class="prompt-section"><h4>System Prompt &nbsp;<span style="color:var(--dim);font-weight:normal">' + fmtBytes(promptChars) + '</span></h4>' +
     '<pre class="prompt-pre">' + esc(d.last_prompt || '') + '</pre></div>' +
+    '<div class="prompt-section"><h4>Messages Array &nbsp;<span style="color:var(--dim);font-weight:normal">' + msgsTurns + ' turns · ' + fmtBytes(msgsChars) + '</span></h4>' +
+    '<pre class="prompt-pre">' +
+    (ex && ex.messages_json ? esc(ex.messages_json) : '<span style="color:var(--dim)">No messages yet.</span>') +
+    '</pre></div>' +
     '<div class="prompt-section"><h4>Last Exchange</h4>' +
     '<pre class="prompt-pre">' +
     (ex ? esc('USER: ' + ex.user_message + '\\n\\n---\\n\\nREPLY: ' + ex.reply_text) : 'No exchange yet') +

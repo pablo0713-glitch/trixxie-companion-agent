@@ -35,12 +35,12 @@ Start the agent:
 ./run.sh
 ```
 
-Then open **[http://localhost:8080/setup](http://localhost:8080/setup)** in a browser. The 10-step wizard walks through:
+Then open **[http://localhost:8080/setup](http://localhost:8080/setup)** in a browser. The 9-step wizard walks through:
 
-- Agent name and persona
+- Agent name and your name
 - Model provider — **Anthropic (Claude)** or **Ollama (local)**
 - Platform credentials — Discord bot token, SL bridge secret
-- Persona sections — overview, personality, purpose, boundaries, roleplay rules
+- Persona — personality, boundaries, roleplay rules (each a single concise field)
 - Tools — web search, notes, SL actions
 - Platform-specific behavior and additional context
 
@@ -72,10 +72,10 @@ Once the agent is running, open **[http://localhost:8080/debug](http://localhost
 | Tab | What it shows |
 |---|---|
 | **Logs** | Real-time Python log stream (SSE). Filter by level and logger name. |
-| **Sensors** | Live SensorStore snapshot per region — sensor types, values, and ages. Auto-refreshes every 5 seconds. |
-| **Prompts & Exchanges** | Last system prompt and full message exchange per tracked user. Auto-refreshes every 10 seconds. |
+| **Sensors** | Live SensorStore snapshot per region — raw JSON (left) and formatted plain-text panel (right) with objects, avatars, environment, chat, RLV state, and clothing. Auto-refreshes every 5 seconds. |
+| **Prompts & Exchanges** | Last system prompt, full messages array (with turn count and char sizes), and exchange per tracked user. Header shows total prompt payload size estimate. Auto-refreshes every 10 seconds. |
 
-Use the debug page to verify what sensor data the agent is actually receiving, inspect the system prompt that was built for a given user, and diagnose unexpected behavior without reading raw log files.
+Use the debug page to verify sensor data, inspect the exact prompt and messages array sent for a given user, and diagnose unexpected behavior without reading raw log files.
 
 ---
 

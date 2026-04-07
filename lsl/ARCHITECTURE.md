@@ -53,11 +53,11 @@ Conversation request. Sent when someone speaks to Trixxie on channel 42.
   "message": "the message text",
   "region": "Region Name",
   "channel": 42,
-  "nearby_chat": ["Speaker: line", "Speaker: line", "..."]
+  "grid": "sl"
 }
 ```
 
-`nearby_chat` contains the last 10 lines buffered from channel 0, providing conversational context.
+Chat context is no longer included in this payload — it travels through the sensor pipeline as `type: "chat"` and is delivered via `SensorStore.get_changes()` like all other sensor types.
 
 **Response body expected:**
 ```json
@@ -92,31 +92,51 @@ The 25-avatar cap is a stability boundary: Second Life sims can hold up to 100 a
 {
   "region": "Region Name",
   "parcel": "Parcel Name",
-  "parcel_desc": "Parcel description text",
+  "parcel_desc": "Parcel description text (multi-line, \n separated)",
+  "rating": "General",
   "time_of_day": "0.75",
   "sun_altitude": "0.42",
   "avatar_count": 14
 }
 ```
+`rating` is fetched asynchronously via `llRequestSimulatorData(region, DATA_SIM_RATING)` on startup and region change — returns `"PG"`, `"MATURE"`, or `"ADULT"`, normalised in the `dataserver` callback to `"General"`, `"Moderate"`, or `"Adult"`. The field is empty on the first env POST if the dataserver response hasn't arrived yet.
+
+`parcel_desc` carriage returns (`\r`, char 13) are stripped before JSON encoding — SL text fields use `\r\n` line endings and a raw CR in a JSON string causes the server to reject the POST with a 422. `\n` line breaks are preserved as `\\n`.
 
 ### `chat`
 ```json
-{
-  "speaker": "Name",
-  "message": "what they said",
-  "timestamp": 1711234567
-}
+["Speaker: line of chat", "Speaker: line of chat", "..."]
 ```
-Only sent when chat filtering rules are satisfied (see Chat Filter section below).
+A JSON array of pre-escaped strings, each formatted as `"Name: message"`. Sent by `do_chat_flush()` every 90 seconds and immediately before each `/42` POST. The server accumulates up to 30 lines in a rolling window.
 
 ### `objects`
 ```json
 [
-  { "name": "Object Name", "distance": 5.1, "scripted": 1 },
+  {
+    "name": "Object Name",
+    "distance": 5.1,
+    "scripted": true,
+    "description": "Object description text",
+    "owner": "Resident Name"
+  },
   ...
 ]
 ```
-Capped at 20 objects. Agents (avatars) are excluded. `scripted` is `1` for active (physical/scripted) objects, `0` for passive.
+Capped at 20 objects. Agents (avatars) are excluded. `scripted` is `true` for active (physical/scripted) objects. `description` is truncated at 200 characters. `owner` is resolved via `llKey2Name`.
+
+### `rlv`
+```json
+{
+  "sitting": true,
+  "on_object": true,
+  "sitting_on": "Pose Stand",
+  "autopilot": false,
+  "flying": false,
+  "teleported": false,
+  "position": [128.5, 64.2, 23.1]
+}
+```
+Sent every 30 seconds and on parcel border crossings. Uses `llGetAgentInfo(llGetOwner())` bit flags: `AGENT_SITTING`, `AGENT_ON_OBJECT`, `AGENT_AUTOPILOT`, `AGENT_FLYING`. `teleported` is `true` for one tick when position has jumped >10m since the last scan. When `on_object` is true, a close-range 2m `llSensor` sweep (scan_mode 4) resolves the object name before posting. `sitting_on` is empty if nothing is detected within 2m.
 
 ### `clothing`
 ```json
@@ -140,21 +160,22 @@ The HUD uses a single 30-second tick (`TICK_SECS = 30.0`). All scanning is drive
 
 | Trigger | Interval | Sensors fired |
 |---|---|---|
-| Startup (`state_entry`) | once | environment |
-| Region change | immediate on detection | environment + objects |
-| Parcel border crossing | immediate on detection | environment + objects |
+| Startup (`state_entry`) | once | environment + sim rating request |
+| Region change | immediate on detection | environment + objects + sim rating request |
+| Parcel border crossing | immediate on detection | environment + objects + RLV state |
+| Every 1 tick | 30 s | RLV / avatar state |
 | Every 3 ticks | 90 s | chat flush (nearby_chat buffer → /sl/sensor) |
 | Every 5 ticks | 150 s | avatars |
 | Every 10 ticks | 300 s | objects |
 | Every 20 ticks | 600 s | environment (time-of-day drift) |
-| On /42 received | immediate | chat flush (pre-message, before POST) |
+| On /42 received | immediate | chat flush + RLV state (per-message mode only: avatars + env also) |
 
 ### Change detection
 
 On every tick, before interval checks run:
 
-1. **Region change** — compares `llGetRegionName()` to `last_region`. On mismatch: fires env + object scans, resets `tick = 0`, and returns early (skips interval checks for that tick).
-2. **Parcel border crossing** — if region is unchanged, reads the current parcel name via `llGetParcelDetails` and compares to `last_parcel`. On mismatch: fires env + object scans. `do_env_scan()` always updates `last_parcel`.
+1. **Region change** — compares `llGetRegionName()` to `last_region`. On mismatch: fires env + object scans, issues a fresh `llRequestSimulatorData` for the new region's rating, resets `tick = 0`, and returns early.
+2. **Parcel border crossing** — if region is unchanged, reads the current parcel name via `llGetParcelDetails` and compares to `last_parcel`. On mismatch: fires env + object + RLV scans. `do_env_scan()` always updates `last_parcel`.
 
 This means a parcel transition within the same region (common on large mainland sims) produces updated environment and object data within at most one timer tick (30 s).
 
@@ -216,7 +237,10 @@ Every `llHTTPRequest` returns a key used to correlate the response in `http_resp
 | `sk_env` | Environment scan post |
 | `sk_obj` | Object proximity post |
 | `sk_clo` | Clothing scan post |
+| `sk_chat` | Chat flush post |
+| `sk_rlv` | RLV / avatar state post |
 | `reply_http` | Active channel-42 conversation request |
+| `sk_sim_query` | `llRequestSimulatorData` query key (dataserver, not HTTP) |
 
 Sensor keys (`sk_*`) are fire-and-forget — responses are discarded immediately. Only `reply_http` drives visible output. While `reply_http` is non-null, new channel-42 messages are rejected with `*still thinking...*`.
 
@@ -243,9 +267,11 @@ The `s_chat` toggle controls whether channel 0 messages are buffered at all. Whe
 | `do_avatar_scan()` | Collects nearest 25 agents via `llGetAgentList`, sorts by distance, posts `avatars` |
 | `do_env_scan()` | Reads parcel/region/time data, posts `environment`; updates `last_parcel` |
 | `do_object_scan()` | Triggers `llSensor` sweep for scan_mode 3 |
+| `do_rlv_scan()` | Reads `llGetAgentInfo` flags + position delta; triggers 2m sensor sweep (scan_mode 4) when sitting on object |
+| `post_rlv_data(sitting_on)` | Builds and posts `rlv` payload with all avatar state fields |
 | `do_clothing_scan()` | Triggers `llSensor` AGENT sweep for scan_mode 1 |
 | `process_clothing_hits(num)` | scan_mode 2 handler — filters attachments, posts `clothing` |
-| `process_object_hits(num)` | scan_mode 3 handler — collects objects, posts `objects` |
+| `process_object_hits(num)` | scan_mode 3 handler — collects objects with name, distance, scripted, description (CR-stripped), owner; posts `objects` |
 | `send_chunked(target, text)` | Splits reply at sentence boundaries, delivers as successive IMs (≤1000 chars each) |
 | `show_menu()` | Displays the HUD control dialog |
 | `show_status()` | Prints sensor state to owner chat |

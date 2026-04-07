@@ -48,6 +48,7 @@ class Settings:
     memory_dir: str
     notes_dir: str
     memory_max_history: int
+    owner_name: str
 
 
 def load_settings() -> Settings:
@@ -92,6 +93,7 @@ def load_settings() -> Settings:
         memory_dir=os.getenv("MEMORY_DIR", "./data/memory"),
         notes_dir=os.getenv("NOTES_DIR", "./data/notes"),
         memory_max_history=int(os.getenv("MEMORY_MAX_HISTORY", "20")),
+        owner_name=os.getenv("OWNER_NAME", ""),
     )
 
 

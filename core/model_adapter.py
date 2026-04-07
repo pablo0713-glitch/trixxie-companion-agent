@@ -66,7 +66,7 @@ class AnthropicAdapter(ModelAdapter):
         self._model = model
 
     async def create(self, *, system, messages, tools, tool_choice, max_tokens) -> ModelResponse:
-        response = await self._client.messages.create(
+        kwargs: dict = dict(
             model=self._model,
             max_tokens=max_tokens,
             system=system,
@@ -74,6 +74,9 @@ class AnthropicAdapter(ModelAdapter):
             tool_choice=tool_choice,
             messages=messages,
         )
+        if isinstance(system, list):
+            kwargs["extra_headers"] = {"anthropic-beta": "prompt-caching-2024-07-31"}
+        response = await self._client.messages.create(**kwargs)
 
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -121,7 +124,7 @@ class OllamaAdapter(ModelAdapter):
         self._client = _AsyncOpenAI(base_url=f"{self._base_url}/v1", api_key="ollama")
 
     async def create(self, *, system, messages, tools, tool_choice, max_tokens) -> ModelResponse:
-        oai_messages = _to_openai_messages(system, messages)
+        oai_messages = _to_openai_messages(_flatten_system_blocks(system), messages)
         oai_tools = _to_openai_tools(tools) if tools else None
         oai_tc = "auto" if tool_choice.get("type") == "auto" else "none"
 
@@ -165,7 +168,7 @@ class OllamaAdapter(ModelAdapter):
 
     async def create_simple(self, *, system, messages, max_tokens) -> str:
         oai_messages: list = []
-        if system:
+        if system := _flatten_system_blocks(system):
             oai_messages.append({"role": "system", "content": system})
         for msg in messages:
             content = msg.get("content", "")
@@ -185,6 +188,15 @@ class OllamaAdapter(ModelAdapter):
 
 
 # ------------------------------------------------------------------ conversion helpers
+
+def _flatten_system_blocks(system: Any) -> str:
+    """Flatten a list of system content blocks to a plain string (for non-Anthropic adapters)."""
+    if isinstance(system, str):
+        return system
+    if isinstance(system, list):
+        return "\n\n".join(b.get("text", "") for b in system if isinstance(b, dict))
+    return str(system) if system else ""
+
 
 def _block_type(block: Any) -> str:
     if isinstance(block, dict):
