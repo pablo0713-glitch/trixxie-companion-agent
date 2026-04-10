@@ -1,0 +1,106 @@
+/srv/
+  agentcore/                 # Core agent framework
+    images/                # Built container images (optional)
+    compose/               # Podman compose files
+    config/                # Global config, secrets templates
+    runtime/               # systemd units, logs, sockets
+    data/                  # Shared persistent data
+
+  users/                   # Per-user agent sandboxes
+    pablo/
+      config/
+      data/
+      logs/
+      runtime/
+    <future-user>/
+      ...
+
+
+      Goal:
+
+      framework code separate from
+
+      per-user state, separate from
+
+      system-level runtime
+
+2. 🧩 Define the container architecture for Trixxie v1
+
+Your agent platform is basically a small constellation of services. The minimal v1 constellation usually includes:
+
+    gateway — FastAPI or similar, handles requests
+
+    agent-core — your runtime logic, memory, tools
+
+    vectorstore — SQLite, Qdrant, or DuckDB (local, simple)
+
+    task-runner — background jobs, scheduled tasks
+
+    proxy — Caddy or Traefik for TLS + routing
+
+For Podman, the cleanest approach is a pod:
+Code
+
+podman pod create --name agentcore-pod -p 80:80 -p 443:443
+
+Then each service runs inside the pod with shared networking.
+
+This gives you:
+
+    unified logs
+
+    unified lifecycle
+
+    no daemon
+
+    SELinux‑friendly isolation
+
+    systemd integration that “just works”
+
+3. ⚙️ Prepare systemd units for 24/7 hosting
+
+This is where your platform becomes a service, not just a container.
+
+A typical unit for the gateway might look like:
+Code
+
+[Unit]
+Description=AgentCore Gateway
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Restart=always
+ExecStart=/usr/bin/podman run --rm \
+  --pod AgentCore-pod \
+  -v /srv/AgentCore/config:/app/config:Z \
+  -v /srv/AgentCore/data:/app/data:Z \
+  AgentCore-gateway:latest
+
+[Install]
+WantedBy=multi-user.target
+
+You’ll have one unit per container, or a single unit that starts the entire pod.
+
+This gives you:
+
+    automatic restart
+
+    clean shutdown
+
+    journald logs
+
+    predictable boot behavior
+
+Where we go next
+
+We’re at a fork with three equally valid next steps. You choose the direction:
+Option A — Build the Podman pod + containers
+
+We define the pod, write the Podmanfiles, and get the services running.
+Option B — Flesh out the /srv directory with real files
+
+We create the config templates, runtime folders, and per-user sandbox structure.
+Option C — Write the systemd units + enable the service
+
+We wire the whole thing into Fedora’s boot process.

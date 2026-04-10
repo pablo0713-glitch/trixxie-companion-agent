@@ -1,0 +1,34 @@
+Trixxie Carissa — Tech Stack
+
+Runtime
+
+Python 3.14, fully async (asyncio)
+Single process — Discord bot, SL bridge, and memory consolidation run concurrently via asyncio.gather()
+AI / LLM
+
+Anthropic Claude (claude-sonnet-4-6) via AsyncAnthropic SDK
+Ollama (local models) as an alternative via openai.AsyncOpenAI pointed at the Ollama /v1 endpoint
+Prompt caching (anthropic-beta: prompt-caching-2024-07-31) on the static system prompt block
+Web Framework
+
+FastAPI + Uvicorn — SL HTTP bridge, setup wizard, debug page, all served on one port (default 8080)
+Platform Interfaces
+
+discord.py — Discord bot
+LSL (Linden Scripting Language, Mono compiler) — HUD script worn in Second Life
+Cool VL Viewer Lua — native IM loop in the Cool VL Viewer (no /42 channel required)
+Storage
+
+Plain JSON files on disk (data/memory/, data/notes/) — no database
+Per-(user, channel) asyncio.Lock for write serialization
+Frontend (Setup Wizard & Debug)
+
+Vanilla HTML/CSS/JS — no framework, no build step
+SSE (Server-Sent Events) for live log streaming in the debug panel
+Config
+
+.env file loaded at startup via python-dotenv
+data/agent_config.json for persona/tools (hot-reloaded after wizard save)
+Tunnel
+
+cloudflared to expose the local bridge to SL/OpenSim servers (free tunnel or named)

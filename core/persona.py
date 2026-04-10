@@ -240,7 +240,7 @@ def build_system_prompt_blocks(
 
     static_parts: list[str] = [_build_core_block(cfg)]
 
-    platform_awareness: str = cfg.get("platform_awareness", "")
+    platform_awareness: str = _get_platform_awareness(cfg, context.platform)
     if platform_awareness:
         static_parts.append(platform_awareness)
 
