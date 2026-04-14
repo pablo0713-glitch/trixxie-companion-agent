@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import time
@@ -21,7 +24,9 @@ from memory.schemas import ConversationFile
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 5
-CROSS_PLATFORM_TURNS = 15
+STM_MAX_ENTRIES = 10
+MEMORY_CAP = 2000
+USER_CAP   = 1200
 
 
 @dataclass
@@ -61,17 +66,20 @@ class AgentCore:
         history = await self._memory.get_history(context.user_id, context.channel_id)
         facts = await self._memory.get_facts(context.user_id)
 
-        memory_notes = ""
-        cross_platform_context = ""
+        memory_files = ""
+        stm_bridge = ""
         if self._person_map:
-            person_id = self._person_map.get_person_id(context.user_id)
+            person_id = self._person_map.get_person_id(context.user_id) or ""
+            context.person_id = person_id
             if person_id:
-                memory_notes = await self._load_memory_notes(person_id)
+                memory_files = await self._load_memory_files(person_id)
             linked_ids = self._person_map.get_linked_ids(context.user_id)
             if linked_ids:
-                cross_platform_context = await self._load_cross_platform_context(linked_ids)
+                stm_bridge = await self._load_stm_bridge(linked_ids)
+        else:
+            context.person_id = context.user_id
 
-        system_blocks = build_system_prompt_blocks(context, facts, memory_notes, cross_platform_context)
+        system_blocks = build_system_prompt_blocks(context, facts, memory_files, stm_bridge)
         # Flatten for debug display (blocks are passed directly to the adapter)
         system_flat = "\n\n".join(b["text"] for b in system_blocks)
         self._last_prompt[context.user_id] = system_flat
@@ -110,6 +118,11 @@ class AgentCore:
                 turn["content"],
             )
 
+        # Fire-and-forget STM entry generation
+        asyncio.create_task(
+            self._append_stm_entry(context.user_id, message, reply_text)
+        )
+
         return AgentResponse(text=reply_text, sl_actions=sl_action_queue)
 
     def get_last_prompt(self, user_id: str) -> str | None:
@@ -121,129 +134,94 @@ class AgentCore:
     def all_tracked_users(self) -> list[str]:
         return list(self._last_prompt.keys())
 
-    async def _load_memory_notes(self, person_id: str) -> str:
-        notes_dir = os.path.join(self._settings.notes_dir, person_id)
-        if not os.path.exists(notes_dir):
-            return ""
-        files = sorted(
-            f for f in os.listdir(notes_dir)
-            if f.startswith("memories_") and f.endswith(".md")
-            and not f.startswith("memories_summary_")
-        )
-        if not files:
-            return ""
-        latest_file = files[-1]
-        # e.g. "memories_2026-04-07.md" → "2026-04-07"
-        date_part = latest_file[len("memories_"):-len(".md")]
-        summary_path = os.path.join(notes_dir, f"memories_summary_{date_part}.md")
-
-        if os.path.exists(summary_path):
+    async def _load_memory_files(self, person_id: str) -> str:
+        """Load MEMORY.md + USER.md for person_id, formatted Hermes-style with § delimiters."""
+        safe = person_id.replace("/", "_").replace(":", "_")
+        mem_dir = Path(self._settings.memory_dir) / safe
+        parts: list[str] = []
+        for fname, cap, label in (
+            ("MEMORY.md", MEMORY_CAP, "MEMORY (agent's notes)"),
+            ("USER.md",   USER_CAP,   "USER (owner profile)"),
+        ):
+            path = mem_dir / fname
+            if not path.exists():
+                continue
             try:
-                async with aiofiles.open(summary_path, "r", encoding="utf-8") as f:
-                    return await f.read()
+                content = path.read_text(encoding="utf-8").strip()
             except OSError:
-                pass
+                continue
+            if not content:
+                continue
+            # Enforce cap
+            if len(content) > cap:
+                content = content[:cap]
+            pct = int(len(content) * 100 / cap)
+            header = f"{label} [{pct}% — {len(content)}/{cap} chars]"
+            parts.append(f"{header}\n{content}")
+        return "\n\n".join(parts)
 
-        try:
-            async with aiofiles.open(os.path.join(notes_dir, latest_file), "r", encoding="utf-8") as f:
-                full_notes = await f.read()
-        except OSError:
-            return ""
-
-        if not full_notes.strip():
-            return ""
-
-        summary = await self._adapter.create_simple(
-            system=(
-                "Summarize the following memory notes into 3–5 bullet points. "
-                "Keep the most personally relevant facts. "
-                "Max 500 characters total. "
-                "Write in second person as context for an AI: "
-                "'User is...', 'User prefers...', etc."
-            ),
-            messages=[{"role": "user", "content": full_notes}],
-            max_tokens=200,
-        )
-
-        if summary:
-            try:
-                async with aiofiles.open(summary_path, "w", encoding="utf-8") as f:
-                    await f.write(summary)
-            except OSError as exc:
-                logger.warning("Failed to cache memory summary: %s", exc)
-
-        return summary or full_notes[:500]
-
-    async def _load_cross_platform_context(self, linked_ids: list[str]) -> str:
-        agent_name = get_agent_config().get("agent_name", "Agent")
+    async def _load_stm_bridge(self, linked_ids: list[str]) -> str:
+        """Load STM entries from linked platform UIDs for cross-platform context."""
         parts: list[str] = []
         for uid in linked_ids:
             platform = uid.split("_")[0].upper()
-            convs: list[ConversationFile] = await self._memory.get_all_conversations(uid)
-            if not convs:
+            safe = uid.replace("/", "_").replace(":", "_")
+            stm_path = Path(self._settings.memory_dir) / safe / "stm.json"
+            if not stm_path.exists():
                 continue
-            latest = max(convs, key=lambda c: c.updated_at)
-            recent_turns = latest.turns[-CROSS_PLATFORM_TURNS:]
-            if not recent_turns:
+            try:
+                data = json.loads(stm_path.read_text(encoding="utf-8"))
+                entries = data.get("entries", [])
+            except (OSError, json.JSONDecodeError):
                 continue
-
-            # Check per-uid summary cache (invalidated when conversation updated_at changes)
-            cache_path = os.path.join(self._settings.memory_dir, uid, "_cross_summary.txt")
-            cached_summary = None
-            if os.path.exists(cache_path):
-                try:
-                    async with aiofiles.open(cache_path, "r", encoding="utf-8") as f:
-                        cache_content = await f.read()
-                    cache_ts, _, cached_text = cache_content.partition("\n")
-                    if cache_ts == latest.updated_at:
-                        cached_summary = cached_text
-                except OSError:
-                    pass
-
-            if cached_summary:
-                parts.append(f"[{platform} — last active {latest.updated_at[:10]}]\n{cached_summary}")
+            if not entries:
                 continue
-
-            # Build transcript and summarize
-            transcript_lines = []
-            for turn in recent_turns:
-                role_label = agent_name if turn["role"] == "assistant" else "User"
-                content = turn.get("content", "")
-                if isinstance(content, list):
-                    texts = [
-                        b.get("text", "")
-                        for b in content
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    ]
-                    content = " ".join(t for t in texts if t)
-                if content:
-                    transcript_lines.append(f"{role_label}: {content[:300]}")
-
-            if not transcript_lines:
-                continue
-
-            transcript = "\n".join(transcript_lines)
-            summary = await self._adapter.create_simple(
-                system=(
-                    "Summarize this conversation excerpt in 1–3 sentences. "
-                    "Focus on what topics were discussed and the overall tone. "
-                    "Max 200 characters."
-                ),
-                messages=[{"role": "user", "content": transcript}],
-                max_tokens=80,
-            )
-
-            if summary:
-                try:
-                    async with aiofiles.open(cache_path, "w", encoding="utf-8") as f:
-                        await f.write(f"{latest.updated_at}\n{summary}")
-                except OSError as exc:
-                    logger.warning("Failed to cache cross-platform summary: %s", exc)
-
-            summary = summary or transcript[:200]
-            parts.append(f"[{platform} — last active {latest.updated_at[:10]}]\n{summary}")
-
+            summaries = "\n---\n".join(e.get("summary", "") for e in entries if e.get("summary"))
+            if summaries:
+                parts.append(f"## Recent Activity — {platform}\n{summaries}")
+        if not parts:
+            return ""
         return "\n\n".join(parts)
+
+    async def _append_stm_entry(self, user_id: str, user_message: str, reply_text: str) -> None:
+        """Generate a 1–2 sentence summary of this exchange and append to stm.json."""
+        try:
+            summary = await self._adapter.create_simple(
+                system="",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            "Summarize this exchange in 1–2 sentences, third person. "
+                            "Focus on what was discussed or decided. Max 120 characters.\n\n"
+                            f"User: {user_message}\n\nAssistant: {reply_text}"
+                        ),
+                    }
+                ],
+                max_tokens=60,
+            )
+            if not summary:
+                return
+            safe = user_id.replace("/", "_").replace(":", "_")
+            stm_path = Path(self._settings.memory_dir) / safe / "stm.json"
+            stm_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                data = json.loads(stm_path.read_text(encoding="utf-8")) if stm_path.exists() else {}
+            except (OSError, json.JSONDecodeError):
+                data = {}
+            entries: list[dict] = data.get("entries", [])
+            entries.append({
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "summary": summary.strip(),
+            })
+            if len(entries) > STM_MAX_ENTRIES:
+                entries = entries[-STM_MAX_ENTRIES:]
+            stm_path.write_text(
+                json.dumps({"user_id": user_id, "entries": entries}, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("STM append failed for %s: %s", user_id, exc)
 
     async def _run_tool_loop(
         self,

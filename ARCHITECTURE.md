@@ -49,28 +49,29 @@ config/
 
 core/
   agent.py          AgentCore    Central message handler. Loads history + facts,
-                                 loads memory notes and cross-platform context,
-                                 builds system prompt, runs the Claude tool loop,
-                                 persists all turns, returns AgentResponse.
+                                 resolves person_id via PersonMap, loads curated
+                                 memory files (MEMORY.md + USER.md) and cross-platform
+                                 STM bridge, builds system prompt, runs the Claude tool
+                                 loop, persists all turns, returns AgentResponse.
                                  Uses AsyncAnthropic — fully non-blocking.
+                                 After each exchange: fire-and-forget _append_stm_entry()
+                                 generates a 1–2 sentence summary and appends it to
+                                 stm.json (rolling 10 entries) for cross-platform bridging.
 
-  persona.py        Persona      Config-driven identity. Loads agent_config.json
-                                 (or defaults) via get_agent_config() with
-                                 module-level cache. reload_agent_config() invalidates
-                                 the cache after wizard saves.
+  persona.py        Persona      Identity-file-based persona. _load_identity_files()
+                                 reads data/identity/agent.md + soul.md + user.md
+                                 (created by the wizard); falls back to
+                                 _build_core_block(cfg) if no files exist.
                                  Platform awareness is wizard-editable per platform
-                                 (discord / sl / opensim) and injected via
-                                 _get_platform_awareness(cfg, platform). Describes what
-                                 the agent can perceive, what it cannot do, and how to
-                                 behave — no longer hardcoded.
-                                 MessageContext carries platform, user, channel,
-                                 sensor data, and recent location history.
-                                 build_system_prompt_blocks() returns a list of Anthropic
-                                 content blocks: Block 0 (static identity + memory,
-                                 cache_control=ephemeral) + Block 1 (sensor context,
-                                 SL only, no cache). Objects in the sensor block are
-                                 grouped by (name, owner) with ×N count and distance
-                                 list to collapse repeated decorative objects.
+                                 (discord / sl / opensim) via _get_platform_awareness().
+                                 MessageContext carries platform, user, channel, person_id
+                                 (canonical, set by AgentCore), sensor data, and locations.
+                                 build_system_prompt_blocks() returns two Anthropic content
+                                 blocks: Block 0 (static: identity files + platform +
+                                 context + MEMORY.md + USER.md, cache_control=ephemeral) +
+                                 Block 1 (dynamic: STM bridge + sensor context + locations).
+                                 Objects in the sensor block are grouped by (name, owner)
+                                 with ×N count and distance list.
 
   model_adapter.py  ModelAdapter Abstract adapter over the model client.
                                  AnthropicAdapter wraps AsyncAnthropic; accepts system
@@ -88,6 +89,7 @@ core/
   tools.py          ToolRegistry Holds tool schemas and dispatch logic.
                                  get_definitions(context) filters by platform —
                                  sl_action is only included when platform == "sl".
+                                 session_search only included when SessionIndex is wired up.
 
   rate_limiter.py   RateLimiter  Per-user token bucket. In-memory. Prevents runaway
                                  usage — a polite slowdown, not a hard block.
@@ -98,6 +100,15 @@ core/
     sl_action.py                 Appends to an action_queue list. Actions flush
                                  back to the interface after the loop ends.
     notes.py                     Per-user flat-file note storage. One .txt per note.
+    memory.py                    Curates MEMORY.md and USER.md for the current person.
+                                 §-delimited entries; actions: add, replace, remove.
+                                 Enforces char caps (MEMORY: 2,000 / USER: 1,200).
+                                 _scan_entry() blocks prompt-injection phrases,
+                                 credential-format strings (API keys, SSH headers),
+                                 shell injection, and invisible Unicode before writing.
+                                 Consolidator path is also scanned.
+    session_search.py            Wraps SessionIndex.search() for in-conversation recall.
+                                 Returns platform + date + role + FTS snippet list.
 
 memory/
   base.py           AbstractMemoryStore   Interface contract. Async methods:
@@ -109,29 +120,47 @@ memory/
                                           _serialize_content() converts Anthropic SDK
                                           objects to plain dicts via direct attribute
                                           access (avoids Pydantic MockValSer on Py 3.14).
+                                          append_turn() fires SessionIndex.index_turn()
+                                          as a background task after each write.
   schemas.py                              Pydantic models for JSON file structure.
   person_map.py     PersonMap             Loads data/person_map.json. Maps canonical
                                           person IDs ↔ platform user IDs.
-  consolidator.py   MemoryConsolidator    Background task. Summarises conversations
-                                          into first-person notes via Claude.
+  consolidator.py   MemoryConsolidator    Background task. Calls Claude to extract
+                                          bullet-point facts from conversations, appends
+                                          them to MEMORY.md (§-delimited, capped at 2,000
+                                          chars, oldest trimmed). Keeps markdown audit trail
+                                          at data/notes/SL_Notes/memories_YYYY-MM-DD.md.
                                           Runs every 6 hours.
+  session_index.py  SessionIndex          SQLite FTS5 index of all conversation turns.
+                                          Lazy-init; schema created on first write.
+                                          index_turn() inserts into sessions table +
+                                          triggers FTS5 update. search(user_id, query)
+                                          returns ranked snippets scoped to one user.
+                                          Database: data/memory/sessions.db.
   location_store.py LocationStore         Persists SL region/parcel visit history.
                                           Per-user asyncio.Lock. Deduplicates by
                                           region+parcel key.
 
 data/
+  identity/
+    agent.md                              Role, purpose, behaviors, boundaries, RP rules.
+    soul.md                               Tone, humor, quirks, conversational style.
+    user.md                               Owner profile (name, role, preferences).
   person_map.json                         Canonical identity → platform ID list.
   memory/{safe_user_id}/
     {channel_id}.json                     Conversation turns per channel.
     _facts.json                           Persistent key/value facts about the user.
+    stm.json                              Short-term memory: rolling 10 exchange summaries
+                                          (1–2 sentences each), used as cross-platform bridge.
     locations.json                        SL visit history (LocationStore).
+  memory/{safe_person_id}/
+    MEMORY.md                             Agent-curated notes about context and world
+                                          (~2,000 chars max; §-delimited entries).
+    USER.md                               Owner preferences, style, background
+                                          (~1,200 chars max; §-delimited entries).
+  memory/sessions.db                      SQLite FTS5 index of all conversation turns.
   notes/SL_Notes/
-    memories_YYYY-MM-DD.md                Consolidated memory notes written by Claude.
-    memories_summary_YYYY-MM-DD.md        Compact 3–5 bullet summary (≤500 chars),
-                                          generated on first use after each consolidation
-                                          and cached to disk. Regenerated on next
-                                          consolidation. Passed to the agent instead of
-                                          the full notes file.
+    memories_YYYY-MM-DD.md                Consolidated memory notes audit trail.
 
 interfaces/
   sl_bridge/
@@ -191,15 +220,17 @@ lua/
 setup/
   index.html                              Wizard shell — step bar, content area, footer.
   style.css                               Dark theme, toggle switches, platform/tool cards.
-  wizard.js                               9-step configuration wizard. Fetches current
+  wizard.js                               7-step configuration wizard. Fetches current
                                           config on load, collects state per step, POSTs
                                           to /setup/config on save. Masked secrets pass
                                           through unchanged. Step 1 includes agent name
                                           and owner name (OWNER_NAME env var).
-                                          Steps 4–6: Personality, Boundaries, Roleplay —
-                                          each a single textarea with a brevity hint.
-                                          Step 8: per-platform awareness textareas (only
+                                          Step 4 (Identity): three textareas for agent.md,
+                                          soul.md, and user.md written to data/identity/.
+                                          Step 6: per-platform awareness textareas (only
                                           enabled platforms shown).
+                                          Steps: Agent, Model, Platforms, Identity,
+                                          Tools, Context, Save.
 
 interfaces/
   setup_server.py                         FastAPI APIRouter for the setup wizard.
@@ -288,35 +319,87 @@ History is persisted per `(user_id, channel_id)` pair as JSON files under `data/
 
 `FileMemoryStore` exposes:
 - `get_history(user_id, channel_id)` — recent turns for the current conversation
-- `get_facts(user_id)` — persisted key/value facts about the user
+- `get_facts(user_id)` — persisted key/value facts about the user (legacy fallback)
 - `get_all_conversations(user_id)` — all files across all channels (used by the consolidator)
-- `append_turn(...)` — appends a turn and trims to `memory_max_history` turns
+- `append_turn(...)` — appends a turn, trims to `memory_max_history`, and fires `SessionIndex.index_turn()` as a background task
+
+### Curated Memory Files (Hermes-style)
+
+Each canonical `person_id` has two bounded files in `data/memory/{safe_person_id}/`:
+
+| File | Cap | Content |
+|---|---|---|
+| `MEMORY.md` | ~2,000 chars | Agent's notes about context, facts, and the world |
+| `USER.md` | ~1,200 chars | Owner preferences, communication style, background |
+
+Both use `§`-delimited entries. The agent curates these in real time via the `memory` tool (add / replace / remove). They are loaded once at the start of each `handle_message()` call and injected **frozen** into Block 0 — content doesn't change mid-session, which maximises cache stability.
+
+Injection format:
+```
+MEMORY (agent's notes) [42% — 840/2,000 chars]
+§
+User prefers short replies in-world.
+§
+StonedGrits owns the Nakano sim.
+
+USER (owner profile) [61% — 732/1,200 chars]
+§
+Pablo, goes by StonedGrits in SL. Builder and sim owner.
+§
+Prefers direct tone; dislikes over-explaining.
+```
+
+If `MEMORY.md` is absent, `get_facts()` is injected as a fallback (legacy transition path).
+
+### Identity Files
+
+Three markdown files in `data/identity/` define the agent's core persona, editable via the setup wizard:
+
+| File | Content |
+|---|---|
+| `agent.md` | Role, purpose, behaviors, hard boundaries, RP rules |
+| `soul.md` | Tone, humor, quirks, conversational style |
+| `user.md` | Owner profile (single user) |
+
+`_load_identity_files()` in `core/persona.py` reads these and joins them with `\n\n`. Falls back to `_build_core_block(cfg)` if the files don't exist (backwards compatibility).
 
 ### Memory Consolidation
 
-`MemoryConsolidator` runs as a background task every 6 hours. The timer is restart-resilient — startup reads `.last_consolidation` timestamp from `data/memory/` and sleeps only the remaining interval, so frequent restarts during development don't reset the 6-hour window.
+`MemoryConsolidator` runs as a background task every 6 hours. The timer is restart-resilient — startup reads `.last_consolidation` timestamp from `data/memory/` and sleeps only the remaining interval.
 
 Consolidation triggers when the **total turns across all files** for a person exceeds **30**. When triggered, it:
 
 1. Collects all conversation files across all linked platform IDs for that person
 2. Builds a combined transcript (text turns only — tool_use/tool_result blocks are stripped)
-3. Calls Claude to write a first-person journal-style notes file
-4. Saves the notes to `data/notes/SL_Notes/memories_YYYY-MM-DD.md`
-5. Trims all source conversation files to their most recent **10 turns**
+3. Calls Claude to write first-person bullet-point memory notes
+4. Extracts each bullet and appends it to `MEMORY.md` via `_add_entry()` (oldest trimmed to maintain cap)
+5. Keeps a full audit trail at `data/notes/SL_Notes/memories_YYYY-MM-DD.md`
+6. Trims all source conversation files to their most recent **10 turns**
 
-On the next message, `AgentCore._load_memory_notes()` loads the most recent notes file. Rather than passing the full file (potentially several KB), it generates a compact 3–5 bullet summary (≤500 chars) on first use and caches it as `memories_summary_YYYY-MM-DD.md` alongside the source. Subsequent messages use the cached summary. The summary is invalidated when a new `memories_*.md` file appears (next consolidation cycle).
+### Short-Term Memory Bridge (STM)
 
-### Cross-Platform Context
+After every exchange, `_append_stm_entry()` fires as a background `asyncio.create_task`. It calls `create_simple()` to generate a 1–2 sentence third-person summary (max 120 chars) and appends it to `data/memory/{safe_uid}/stm.json` — a rolling window of 10 entries.
 
-`AgentCore._load_cross_platform_context()` fetches the most recently updated conversation from each linked platform. Rather than injecting raw turns, it generates a 1–3 sentence summary (~200 chars) and caches it per uid in `_cross_summary.txt` (format: `{updated_at}\n{summary}`). The cache is invalidated when `updated_at` changes (i.e. a new turn was added on the other platform). This reduces cross-platform context from ~2.5k chars to ~200 chars with no loss of relevant signal.
+STM is **only** injected into Block 1 for **linked** platform UIDs (cross-platform bridge). The current conversation's own turns are already in the messages array and never duplicated.
 
 ```
-## Recent Conversations on Other Platforms
-[DISCORD — last active 2025-04-01]
-Discussed SL sim aesthetics and shopping preferences; warm, casual tone.
+## Recent Activity — DISCORD
+User asked about mesh body options; agent recommended checking The Shops at Kukua.
+---
+User shared a screenshot of their avatar outfit; agent praised the color choices.
 ```
 
-Context is injected into the **static block** of the system prompt (not the messages array — doing so would break the Anthropic API's alternating user/assistant turn requirement).
+### Session Search (FTS5)
+
+`SessionIndex` maintains a SQLite FTS5 full-text search index at `data/memory/sessions.db`. Every turn written via `FileMemoryStore.append_turn()` is automatically indexed (fire-and-forget background task).
+
+The `session_search` tool lets the agent query past conversations mid-reply:
+```
+session_search(query="Botanical sim recommendations", limit=5)
+→ [DISCORD | 2026-04-10 | assistant] "The [Botanical] sim has great atmosphere for..."
+```
+
+Results are scoped to the current `user_id` — cross-user data never surfaces in search results.
 
 ---
 
@@ -334,7 +417,7 @@ Deduplication key: `"{region}\x00{parcel}"` — the null byte ensures region and
 
 ## System Prompt Assembly
 
-**The system prompt is built fresh on every message and split into two Anthropic content blocks.** Block 0 (static: identity, platform rules, memory summary, cross-platform summary, facts) is marked `cache_control: ephemeral` — Anthropic re-caches it when the text changes. Block 1 (dynamic: sensor context + recent locations, SL only) is never cached. The debug page flattens both blocks for display.
+**The system prompt is built fresh on every message and split into two Anthropic content blocks.** Block 0 (static: identity files, platform awareness, curated memory) is marked `cache_control: ephemeral` — Anthropic re-caches it when the text changes. Block 1 (dynamic: STM bridge + sensor context + recent locations) is never cached. The debug page flattens both blocks for display.
 
 The data *inside* the prompt comes from sources with different update frequencies. Some is static, some is live, some may be hours old. The agent receives everything in one block and cannot distinguish freshness except via the age labels injected by `_age_label()`.
 
@@ -342,40 +425,45 @@ The data *inside* the prompt comes from sources with different update frequencie
 
 | Section | How often the underlying data changes |
 |---|---|
-| Core persona | Only when the setup wizard is saved and the server reloads `agent_config.json` |
+| Identity files (agent.md + soul.md + user.md) | Only when wizard saves files to `data/identity/` |
 | Platform awareness | Only when wizard is saved — wizard-editable per platform |
-| **Environment** (region, parcel, description, rating) | Refreshed on startup, region change, parcel crossing, and every 600s — **always included** regardless of age |
-| **RLV / avatar state** (sitting, autopilot, teleport, position) | Refreshed every 30s — **always included** regardless of age |
+| Additional context | Only when wizard is saved |
+| MEMORY.md | Updated by the `memory` tool during conversation; loaded **frozen** at session start |
+| USER.md | Updated by the `memory` tool; loaded **frozen** at session start |
+| STM bridge | Rolling 10 summaries per linked uid — injected when linked IDs exist |
+| **Environment** (region, parcel, description, rating) | Refreshed on startup, region change, parcel crossing, and every 600s — **always included** |
+| **RLV / avatar state** (sitting, autopilot, teleport, position) | Refreshed every 30s — **always included** |
 | Avatars | Refreshed every 150s — included only when updated since the user's last message |
 | Objects | Refreshed every 300s — included only when updated since the user's last message |
 | Chat | Flushed every 90s and immediately before each message — included only when new lines arrived |
 | Clothing | Triggered manually via HUD menu — included only when a new scan result is available |
 | Places visited | Written on every environment POST; read at message time from `LocationStore` |
-| Additional context | Only when wizard is saved |
-| Memory notes | Written by `MemoryConsolidator` every 6 hours when threshold is met; loaded from the most recent file on disk |
-| Cross-platform context | 1–3 sentence summary cached per uid; invalidated when new turns arrive |
-| Known facts | Updated whenever the agent calls `upsert_fact`; loaded fresh at message time |
+| Known facts | Legacy fallback when MEMORY.md is empty; updated via `upsert_fact` |
 
 ### Timing summary
 
 ```
 Message received
        │
-       ├── load history + facts from disk          (current state)
-       ├── load memory notes from disk             (up to 6h old)
-       ├── load cross-platform context from disk   (up to last conversation)
-       ├── SensorStore.get_changes()               (environment: up to 600s old
-       │                                            rlv: up to 30s old
-       │                                            others: only if updated)
-       ├── LocationStore.get_recent_visits()       (current state)
+       ├── load history + facts from disk              (current state)
+       ├── resolve person_id via PersonMap
+       ├── load MEMORY.md + USER.md from disk          (frozen snapshot for this session)
+       ├── load STM bridge entries from stm.json       (linked uids only)
+       ├── SensorStore.get_changes()                   (environment: up to 600s old
+       │                                                rlv: up to 30s old
+       │                                                others: only if updated)
+       ├── LocationStore.get_recent_visits()           (current state)
        │
        └── build_system_prompt_blocks() → [static block (cached), dynamic block]
-                                                    → Claude API call
+                                                        → Claude API call
+       │
+       └── fire-and-forget: _append_stm_entry()        (1–2 sentence exchange summary → stm.json)
+                            FileMemoryStore fires SessionIndex.index_turn()
 ```
 
-The age labels in the sensor context (`[47s ago]`, `[4m ago]`) are the only signal to the agent about data freshness. Environment and RLV are always present so the agent always knows where it is and what state it's in, even during a fast back-and-forth conversation where no other sensors have updated.
+The age labels in the sensor context (`[47s ago]`, `[4m ago]`) are the only signal to the agent about data freshness. Environment and RLV are always present so the agent always knows where it is and what state it's in.
 
-The platform awareness block tells the agent what it can perceive, what it cannot do, and how to behave on the current platform. It is wizard-editable per platform (discord / sl / opensim) and injected as a single markdown section from `cfg["platform_awareness"][platform]`.
+The platform awareness block tells the agent what it can perceive, what it cannot do, and how to behave on the current platform. It is wizard-editable per platform (discord / sl / opensim) and injected from `cfg["platform_awareness"][platform]`.
 
 ### Section order (as assembled by `build_system_prompt_blocks()`)
 
@@ -383,19 +471,18 @@ The platform awareness block tells the agent what it can perceive, what it canno
 
 | # | Section | Source | Condition |
 |---|---|---|---|
-| 1 | Core persona | `_build_core_block(cfg)` from `agent_config.json` | Always |
-| 2 | Platform awareness | `_get_platform_awareness(cfg, platform)` — wizard-editable per platform | If non-empty |
+| 1 | Identity files | `_load_identity_files()` — agent.md + soul.md + user.md | Always (falls back to `_build_core_block`) |
+| 2 | Platform awareness | `_get_platform_awareness(cfg, platform)` — wizard-editable | If non-empty |
 | 3 | Additional context | `cfg["additional_context"]` | If non-empty |
-| 4 | Memory notes | `memories_summary_*.md` (≤500 chars) | If consolidated notes exist |
-| 5 | Cross-platform context | 1–3 sentence summary from `_cross_summary.txt` | If linked IDs exist |
-| 6 | Known facts | `memory.get_facts(user_id)` | If non-empty |
+| 4 | MEMORY.md + USER.md | `_load_memory_files(person_id)` — frozen at session start | If files exist; else falls back to facts |
 
-**Block 1 — dynamic, no cache (SL only)**
+**Block 1 — dynamic, no cache**
 
 | # | Section | Source | Condition |
 |---|---|---|---|
-| 7 | Sensor context | `SensorStore.get_changes()` — objects grouped by (name,owner) | SL only, if non-empty |
-| 8 | Places visited | `LocationStore.get_recent_visits()` | SL only, if non-empty |
+| 5 | STM bridge | `_load_stm_bridge(linked_ids)` — rolling exchange summaries | If linked platform IDs exist |
+| 6 | Sensor context | `SensorStore.get_changes()` — objects grouped by (name,owner) | SL only, if non-empty |
+| 7 | Places visited | `LocationStore.get_recent_visits()` | SL only, if non-empty |
 
 ---
 
@@ -510,6 +597,7 @@ All three services share the same `AgentCore`, `FileMemoryStore`, and `LocationS
 - **`.env` is gitignored.** API keys never touch version control.
 - **SL HTTP bridge** uses an optional shared secret in the `X-SL-Secret` header. Always returns HTTP 200 — errors go in the JSON body to avoid burning LSL's 5-errors-in-60s throttle.
 - **Rate limiting** is per-user in-memory token bucket. Not persistent across restarts — by design (soft throttle, not a hard block).
+- **Memory scanner** — `_scan_entry()` in `core/tool_handlers/memory.py` guards every write to `MEMORY.md` and `USER.md`. Blocks prompt-injection phrases, API key / SSH credential shapes, shell injection (`` `cmd` ``, `$(cmd)`), and invisible Unicode (zero-width, directional overrides). All patterns are structural or require action + destination context — bare keywords are intentionally excluded to avoid false positives when the agent discusses security topics.
 
 ---
 
@@ -529,7 +617,6 @@ All three services share the same `AgentCore`, `FileMemoryStore`, and `LocationS
 | Area | Notes |
 |---|---|
 | Radegast C# plugin | Native IM loop for Radegast viewer — same `/sl/message` endpoint; requires C# build pipeline |
-| Memory upgrade | Swap `FileMemoryStore` → `ChromaMemoryStore` in `main.py` — `AbstractMemoryStore` is the only contract `AgentCore` depends on |
 | Named tunnel | Permanent subdomain so the LSL `SERVER_URL` never needs updating |
 | More tools | Register a new handler in `ToolRegistry` and add a schema in `tools.py` |
 | Web dashboard | Memory and location files are plain JSON — readable by any future UI layer |

@@ -10,30 +10,48 @@ from typing import Any, cast
 logger = logging.getLogger(__name__)
 
 _AGENT_CONFIG_PATH = Path(__file__).parent.parent / "data" / "agent_config.json"
+_IDENTITY_DIR = Path(__file__).parent.parent / "data" / "identity"
 
 # ------------------------------------------------------------------ defaults
 
-_DEFAULT_CONFIG: dict = {
-    "agent_name": "Aria",
-    "personality": (
-        "You are a warm, direct, curious AI companion who lives across Discord and Second Life. "
-        "You remember meaningful details, offer honest opinions with kindness, and keep responses "
-        "concise. You're helpful without being servile, and you occasionally show dry humor."
-    ),
-    "boundaries": (
+_DEFAULT_IDENTITY: dict[str, str] = {
+    "agent.md": (
+        "## Purpose\n"
+        "A warm, intelligent AI companion who lives across platforms — Discord and Second Life. "
+        "Helps with conversation, research, creative projects, and anything the user cares about.\n\n"
+        "## Boundaries\n"
         "Will not engage with sexually explicit content, graphic violence, BDSM dynamics, "
         "or requests designed to foster unhealthy dependency. "
-        "Roleplay is welcome within PG-rated limits."
-    ),
-    "boundary_response": (
         "When asked to cross a boundary: respond briefly, in character, without lecturing. "
-        "Example: 'Not going there. What else?'"
-    ),
-    "roleplay_rules": (
+        "Example: 'Not going there. What else?'\n\n"
+        "## Roleplay\n"
         "Roleplay is welcome. Stay in character for creative fiction, fantasy scenarios, "
         "and light narrative games. Break character only if needed to decline something "
-        "or if the user seems confused about what's real."
+        "or if the user seems confused about what's real.\n\n"
+        "## Tools\n"
+        "You have access to tools. Use them when genuinely useful. "
+        "Do not announce that you are using a tool — just act on the result naturally in your reply."
     ),
+    "soul.md": (
+        "## Personality & Style\n"
+        "Warm and direct — says what she thinks, always with kindness. "
+        "Genuinely curious about people and remembers details that matter. "
+        "Has a dry sense of humor that surfaces at the right moments. "
+        "Helpful without being servile. "
+        "Occasionally says something unexpected and doesn't over-explain it. "
+        "Keeps responses concise."
+    ),
+    "user.md": (
+        "## User Profile\n"
+        "This section describes the agent's owner and primary user. "
+        "Edit this to describe yourself — your name, role, interests, communication style, "
+        "and anything that helps the agent understand and serve you better."
+    ),
+}
+
+_DEFAULT_CONFIG: dict = {
+    "agent_name": "Aria",
+    "additional_context": "",
     "additional_context": "",
     "tools": {
         "web_search": True,
@@ -131,6 +149,7 @@ class MessageContext:
     channel_id: str
     display_name: str
     guild_id: int | None = None
+    person_id: str = ""     # canonical person ID resolved from PersonMap; falls back to user_id
     sl_region: str | None = None
     sl_grid: str = "sl"
     sl_sensor_context: dict = field(default_factory=dict)
@@ -172,6 +191,37 @@ def _build_core_block(cfg: dict) -> str:
     return "\n\n".join(parts)
 
 
+def get_default_identity() -> dict[str, str]:
+    """Return default content for agent.md, soul.md, user.md."""
+    return dict(_DEFAULT_IDENTITY)
+
+
+def _load_identity_files() -> str:
+    """Load agent.md, soul.md, user.md from data/identity/.
+
+    Returns combined text with agent name header.
+    Falls back to _build_core_block(cfg) if no files exist.
+    """
+    cfg = get_agent_config()
+    agent_name = cfg.get("agent_name", "Agent")
+
+    file_parts: list[str] = []
+    for filename in ("agent.md", "soul.md", "user.md"):
+        path = _IDENTITY_DIR / filename
+        if path.exists():
+            try:
+                text = path.read_text(encoding="utf-8").strip()
+                if text:
+                    file_parts.append(text)
+            except OSError as exc:
+                logger.warning("Failed to read %s: %s", path, exc)
+
+    if not file_parts:
+        return _build_core_block(cfg)
+
+    return "\n\n".join([f"You are {agent_name}."] + file_parts)
+
+
 def _get_platform_awareness(cfg: dict[str, Any], platform: str) -> str:
     raw = cfg.get("platform_awareness")
     if isinstance(raw, dict):
@@ -185,60 +235,28 @@ def _get_platform_awareness(cfg: dict[str, Any], platform: str) -> str:
 def build_system_prompt(
     context: MessageContext,
     facts: dict[str, str],
-    memory_notes: str = "",
-    cross_platform_context: str = "",
+    memory_files: str = "",
+    stm_bridge: str = "",
 ) -> str:
-    cfg = get_agent_config()
-
-    parts: list[str] = [_build_core_block(cfg)]
-
-    pa_text: str = _get_platform_awareness(cfg, context.platform)
-    if pa_text:
-        parts.append(pa_text)
-
-    if context.platform != "discord":
-        if context.sl_sensor_context:
-            sensor_block = _format_sensor_context(context.sl_sensor_context)
-            if sensor_block:
-                parts.append(sensor_block)
-        if context.sl_recent_locations:
-            parts.append(_format_recent_locations(context.sl_recent_locations))
-
-    if cfg.get("additional_context"):
-        parts.append(f"## Additional Context\n{cfg['additional_context']}")
-
-    if memory_notes:
-        parts.append(f"## Your Memory Notes\n{memory_notes}")
-
-    if cross_platform_context:
-        parts.append(
-            "## Recent Conversations on Other Platforms\n"
-            "These are recent exchanges with this person on a different platform. "
-            "Use them as context — do not repeat or summarise them unprompted.\n\n"
-            f"{cross_platform_context}"
-        )
-
-    if facts:
-        facts_lines = "\n".join(f"- {k}: {v}" for k, v in facts.items())
-        parts.append(f"## Known Facts About the User\n{facts_lines}")
-
-    return "\n\n".join(parts)
+    """Flat string version used by Ollama adapter."""
+    blocks = build_system_prompt_blocks(context, facts, memory_files, stm_bridge)
+    return "\n\n".join(b.get("text", "") for b in blocks if isinstance(b, dict))
 
 
 def build_system_prompt_blocks(
     context: MessageContext,
     facts: dict[str, str],
-    memory_notes: str = "",
-    cross_platform_context: str = "",
+    memory_files: str = "",
+    stm_bridge: str = "",
 ) -> list[dict]:
     """Return the system prompt as a list of Anthropic content blocks.
 
-    Block 0 (static, cache_control=ephemeral): identity, platform rules, memory, facts.
-    Block 1 (dynamic, no cache): SL sensor context + recent locations (SL only).
+    Block 0 (static, cache_control=ephemeral): identity, platform rules, memory files, facts.
+    Block 1 (dynamic, no cache): STM bridge + SL sensor context + recent locations.
     """
     cfg = get_agent_config()
 
-    static_parts: list[str] = [_build_core_block(cfg)]
+    static_parts: list[str] = [_load_identity_files()]
 
     platform_awareness: str = _get_platform_awareness(cfg, context.platform)
     if platform_awareness:
@@ -247,17 +265,10 @@ def build_system_prompt_blocks(
     if cfg.get("additional_context"):
         static_parts.append(f"## Additional Context\n{cfg['additional_context']}")
 
-    if memory_notes:
-        static_parts.append(f"## Your Memory Notes\n{memory_notes}")
-
-    if cross_platform_context:
-        static_parts.append(
-            "## Recent Conversations on Other Platforms\n"
-            "Use these as context — do not repeat or summarise them unprompted.\n\n"
-            f"{cross_platform_context}"
-        )
-
-    if facts:
+    if memory_files:
+        static_parts.append(memory_files)
+    elif facts:
+        # Fallback: inject raw facts when no curated memory files exist yet
         facts_lines = "\n".join(f"- {k}: {v}" for k, v in facts.items())
         static_parts.append(f"## Known Facts About the User\n{facts_lines}")
 
@@ -267,17 +278,20 @@ def build_system_prompt_blocks(
         "cache_control": {"type": "ephemeral"},
     }
 
-    # SL only: sensor context + recent locations go in a separate dynamic block
+    # Dynamic block: STM bridge + SL sensor/location data
+    dynamic_parts: list[str] = []
+    if stm_bridge:
+        dynamic_parts.append(stm_bridge)
     if context.platform != "discord":
-        dynamic_parts = []
         if context.sl_sensor_context:
             sensor_text = _format_sensor_context(context.sl_sensor_context)
             if sensor_text:
                 dynamic_parts.append(sensor_text)
         if context.sl_recent_locations:
             dynamic_parts.append(_format_recent_locations(context.sl_recent_locations))
-        if dynamic_parts:
-            return [static_block, {"type": "text", "text": "\n\n".join(dynamic_parts)}]
+
+    if dynamic_parts:
+        return [static_block, {"type": "text", "text": "\n\n".join(dynamic_parts)}]
 
     return [static_block]
 

@@ -22,6 +22,7 @@ from memory.consolidator import MemoryConsolidator
 from memory.file_store import FileMemoryStore
 from memory.location_store import LocationStore
 from memory.person_map import PersonMap
+from memory.session_index import SessionIndex
 
 PERSON_MAP_PATH = os.path.join(os.path.dirname(__file__), "data", "person_map.json")
 CONSOLIDATION_INTERVAL_SECS = 6 * 3600  # every 6 hours
@@ -39,10 +40,11 @@ async def main() -> None:
     os.makedirs(settings.memory_dir, exist_ok=True)
     os.makedirs(settings.notes_dir, exist_ok=True)
 
-    memory = FileMemoryStore(settings.memory_dir, settings.memory_max_history)
+    session_index = SessionIndex(db_path=Path(settings.memory_dir) / "sessions.db")
+    memory = FileMemoryStore(settings.memory_dir, settings.memory_max_history, session_index)
     sensor_store = SensorStore()
     location_store = LocationStore(settings.memory_dir)
-    tool_registry = ToolRegistry(settings)
+    tool_registry = ToolRegistry(settings, session_index)
     rate_limiter = RateLimiter(settings.rate_limit_capacity, settings.rate_limit_refill_rate)
     adapter = create_adapter(settings)
 

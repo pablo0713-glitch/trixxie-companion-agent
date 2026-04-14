@@ -35,12 +35,12 @@ Start the agent:
 ./run.sh
 ```
 
-Then open **[http://localhost:8080/setup](http://localhost:8080/setup)** in a browser. The 9-step wizard walks through:
+Then open **[http://localhost:8080/setup](http://localhost:8080/setup)** in a browser. The 7-step wizard walks through:
 
 - Agent name and your name
 - Model provider — **Anthropic (Claude)** or **Ollama (local)**
 - Platform credentials — Discord bot token, SL bridge secret
-- Persona — personality, boundaries, roleplay rules (each a single concise field)
+- Identity — three markdown files: agent role/purpose/boundaries, soul/personality, and owner profile
 - Tools — web search, notes, SL actions
 - Platform-specific behavior and additional context
 
@@ -203,15 +203,19 @@ With this setting you can revert `GRID` back to `"sl"` for unrestricted reply le
 
 ## Notes and Memory
 
-Trixxie remembers across conversations:
+Trixxie has layered memory that persists across sessions:
 
-- **Conversation history** — recent turns per user and channel
-- **Facts** — things she learns about you over time
+- **Conversation history** — recent turns per user and channel, capped and trimmed automatically
+- **Curated memory** — two bounded files she maintains herself using the `memory` tool:
+  - `MEMORY.md` (~2,000 chars) — context, facts, and notes about the world
+  - `USER.md` (~1,200 chars) — your preferences, style, and background
+- **Session search** — full-text search over all past conversation turns via SQLite FTS5; she can recall specific things from previous sessions when you ask
 - **Notes** — things you explicitly ask her to save
+- **Short-term memory bridge** — 1–2 sentence summaries written after each exchange, used to share context across Discord and SL
 
 ```
 "Trixxie, remember that I love the Botanical sim"
-"What sims have I mentioned liking?"
+"What did we talk about last week in SL?"
 "Make a note: shopping list — new boots, glam hair"
 ```
 
@@ -226,17 +230,20 @@ companion-agent/
 ├── core/
 │   ├── agent.py                 # AgentCore — shared brain for both platforms
 │   ├── model_adapter.py         # ModelAdapter — Anthropic and Ollama backends
-│   ├── persona.py               # Config-driven system prompt; self-awareness block
+│   ├── persona.py               # Identity files, system prompt assembly
 │   ├── tools.py                 # Tool registry and dispatch
 │   ├── rate_limiter.py          # Per-user request throttling
 │   └── tool_handlers/
 │       ├── web_search.py        # Web search (Brave/Serper)
 │       ├── sl_action.py         # SL action queue
-│       └── notes.py             # Persistent note storage
+│       ├── notes.py             # Persistent note storage
+│       ├── memory.py            # Curate MEMORY.md / USER.md
+│       └── session_search.py    # Full-text search over past sessions
 ├── memory/
 │   ├── base.py                  # Abstract memory interface
-│   ├── file_store.py            # File-based implementation
+│   ├── file_store.py            # File-based implementation + FTS indexing
 │   ├── consolidator.py          # Background memory consolidation (every 6h)
+│   ├── session_index.py         # SQLite FTS5 index of all turns
 │   ├── person_map.py            # Discord + SL identity linking
 │   ├── location_store.py        # SL region/parcel visit history
 │   └── schemas.py               # Data models
@@ -248,7 +255,7 @@ companion-agent/
 ├── setup/
 │   ├── index.html               # Wizard shell
 │   ├── style.css                # Dark theme
-│   └── wizard.js                # 10-step wizard
+│   └── wizard.js                # 7-step wizard
 ├── lsl/
 │   ├── companion_bridge.lsl     # HUD script worn by the agent's avatar
 │   └── ARCHITECTURE.md          # LSL internals, sensor formats, timer schedule
@@ -256,9 +263,10 @@ companion-agent/
 │   ├── trixxie_companion.lua    # Cool VL Viewer automation script (native IM loop)
 │   └── README.md                # Setup instructions for Lua interface
 └── data/                        # Runtime data (gitignored)
-    ├── agent_config.json        # Persona and tool config (written by wizard)
+    ├── agent_config.json        # Tool config and platform awareness (written by wizard)
     ├── person_map.json          # Canonical identity → platform ID list
-    ├── memory/
+    ├── identity/                # agent.md, soul.md, user.md (written by wizard)
+    ├── memory/                  # Conversation files, MEMORY.md, USER.md, stm.json, sessions.db
     └── notes/
 ```
 
@@ -266,13 +274,13 @@ companion-agent/
 
 ## Boundaries
 
-Trixxie will not engage with:
-- Sexual or sexually explicit content
-- Gore, torture, or graphic violence
-- BDSM or master/slave dynamics
-- Requests designed to create parasocial dependency
+Default boundaries (editable via the wizard's Identity step in `agent.md`):
+- No sexually explicit content
+- No gore or graphic violence
+- No BDSM or master/slave dynamics
+- No requests designed to create parasocial dependency
 
-Roleplay is welcome as long as it stays PG-rated. Fantasy combat (jousting, sword fights) is fine.
+Roleplay is welcome. Fantasy combat and light narrative games are fine.
 
 ---
 
@@ -297,6 +305,5 @@ Roleplay is welcome as long as it stays PG-rated. Fantasy combat (jousting, swor
 
 - **Radegast C# plugin:** Native IM loop for Radegast users — same `/sl/message` endpoint
 - **Named cloudflare tunnel:** A persistent subdomain so the `SERVER_URL` in the LSL script never changes
-- **Vector memory:** Swap `FileMemoryStore` for `ChromaMemoryStore` — the abstract interface makes this a one-line change in `main.py`
 - **More tools:** Add calendar, weather, SL Marketplace search, or music identification
 - **Web dashboard:** Memory files are plain JSON — readable by any future UI layer

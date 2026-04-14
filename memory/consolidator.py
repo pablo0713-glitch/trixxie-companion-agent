@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import aiofiles
 
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 CONSOLIDATION_THRESHOLD = 30   # total turns across all files for a person
 KEEP_TURNS_AFTER = 10
+MEMORY_CAP = 2000   # chars cap for MEMORY.md
 
 
 class MemoryConsolidator:
@@ -89,16 +91,44 @@ class MemoryConsolidator:
         if not notes_text:
             return
 
+        # Append new bullet points into MEMORY.md (bounded, trim oldest to make room)
+        memory_dir = Path(self._notes_dir).parent / "memory"
+        safe = person_id.replace("/", "_").replace(":", "_")
+        memory_file = memory_dir / safe / "MEMORY.md"
+        memory_file.parent.mkdir(parents=True, exist_ok=True)
+
+        bullets = [
+            line.lstrip("-•").strip()
+            for line in notes_text.splitlines()
+            if line.strip().startswith(("-", "•"))
+        ]
+        if not bullets:
+            # No bullet list — treat the whole text as a single entry
+            bullets = [notes_text.strip()]
+
+        existing = memory_file.read_text(encoding="utf-8") if memory_file.exists() else ""
+        from core.tool_handlers.memory import _entries, _join_entries, _add_entry, _scan_entry
+        for bullet in bullets:
+            if _scan_entry(bullet):
+                logger.warning("Consolidator: blocked bullet for '%s': %s", person_id, bullet[:80])
+                continue
+            existing = _add_entry(existing, bullet)
+        # Enforce cap — trim oldest entries
+        while len(existing) > MEMORY_CAP and _entries(existing):
+            entries = _entries(existing)
+            entries.pop(0)
+            existing = _join_entries(entries)
+        memory_file.write_text(existing, encoding="utf-8")
+
+        # Keep markdown audit trail
         person_notes_dir = os.path.join(self._notes_dir, person_id)
         os.makedirs(person_notes_dir, exist_ok=True)
-
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        path = os.path.join(person_notes_dir, f"memories_{date_str}.md")
-
-        async with aiofiles.open(path, "w", encoding="utf-8") as f:
+        audit_path = os.path.join(person_notes_dir, f"memories_{date_str}.md")
+        async with aiofiles.open(audit_path, "w", encoding="utf-8") as f:
             await f.write(notes_text)
 
-        logger.info("Memory notes written → %s", path)
+        logger.info("Memory consolidated for '%s' → %s (%d chars)", person_id, memory_file, len(existing))
 
     async def _ask_model(self, person_id: str, transcript: str) -> str:
         cfg = get_agent_config()

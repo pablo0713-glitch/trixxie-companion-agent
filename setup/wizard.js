@@ -6,16 +6,35 @@
 
 const D = {
   agent_name: 'Aria',
-  personality:
-    'You are a warm, direct, curious AI companion who lives across Discord and Second Life. ' +
-    'You remember meaningful details, offer honest opinions with kindness, and keep responses ' +
-    'concise. You\'re helpful without being servile, and you occasionally show dry humor.',
-  boundaries:
-    'You decline sexual content, graphic violence, BDSM dynamics, or anything fostering ' +
-    'unhealthy dependency. Decline briefly and stay in character.',
-  boundary_response: '',
-  roleplay_rules:
-    'Roleplay is welcome within PG limits. Stay in character unless declining a boundary or clarifying reality.',
+  agent_md:
+    '## Purpose\n' +
+    'A warm, intelligent AI companion who lives across platforms — Discord and Second Life. ' +
+    'Helps with conversation, research, creative projects, and anything the user cares about.\n\n' +
+    '## Boundaries\n' +
+    'Will not engage with sexually explicit content, graphic violence, BDSM dynamics, ' +
+    'or requests designed to foster unhealthy dependency. ' +
+    'When asked to cross a boundary: respond briefly, in character, without lecturing. ' +
+    'Example: \'Not going there. What else?\'\n\n' +
+    '## Roleplay\n' +
+    'Roleplay is welcome. Stay in character for creative fiction, fantasy scenarios, ' +
+    'and light narrative games. Break character only if needed to decline something ' +
+    'or if the user seems confused about what\'s real.\n\n' +
+    '## Tools\n' +
+    'You have access to tools. Use them when genuinely useful. ' +
+    'Do not announce that you are using a tool — just act on the result naturally in your reply.',
+  soul_md:
+    '## Personality & Style\n' +
+    'Warm and direct — says what she thinks, always with kindness. ' +
+    'Genuinely curious about people and remembers details that matter. ' +
+    'Has a dry sense of humor that surfaces at the right moments. ' +
+    'Helpful without being servile. ' +
+    'Occasionally says something unexpected and doesn\'t over-explain it. ' +
+    'Keeps responses concise.',
+  user_md:
+    '## User Profile\n' +
+    'This section describes the agent\'s owner and primary user. ' +
+    'Edit this to describe yourself — your name, role, interests, communication style, ' +
+    'and anything that helps the agent understand and serve you better.',
   platform_awareness: {
     discord:
       "## Platform Awareness — Discord\n" +
@@ -67,11 +86,8 @@ const D = {
 };
 
 const MASK = '••••••••';
-const TOTAL = 9;
-const STEP_NAMES = [
-  'Agent', 'Model', 'Platforms', 'Personality', 'Boundaries',
-  'Roleplay', 'Tools', 'Context', 'Save',
-];
+const TOTAL = 7;
+const STEP_NAMES = ['Agent', 'Model', 'Platforms', 'Identity', 'Tools', 'Context', 'Save'];
 
 // ============================================================
 // State
@@ -97,10 +113,9 @@ const state = {
   sl_bridge_secret: '',
   sl_bridge_port: '8080',
   opensim_enabled: false,
-  personality: D.personality,
-  boundaries: D.boundaries,
-  boundary_response: D.boundary_response,
-  roleplay_rules: D.roleplay_rules,
+  agent_md: D.agent_md,
+  soul_md: D.soul_md,
+  user_md: D.user_md,
   web_search_enabled: true,
   search_provider: 'serper',
   search_api_key: '',
@@ -197,10 +212,10 @@ function applyConfig(config) {
 
   if (env.OWNER_NAME) state.owner_name = env.OWNER_NAME;
   if (ag.agent_name) state.agent_name = ag.agent_name;
-  if (ag.personality) state.personality = ag.personality;
-  if (ag.boundaries) state.boundaries = ag.boundaries;
-  if (ag.boundary_response) state.boundary_response = ag.boundary_response;
-  if (ag.roleplay_rules) state.roleplay_rules = ag.roleplay_rules;
+  const id = (ag.identity && typeof ag.identity === 'object') ? ag.identity : {};
+  if (id.agent_md) state.agent_md = id.agent_md;
+  if (id.soul_md)  state.soul_md  = id.soul_md;
+  if (id.user_md)  state.user_md  = id.user_md;
   if (ag.additional_context !== undefined) state.additional_context = ag.additional_context;
   const pa = (ag.platform_awareness && typeof ag.platform_awareness === 'object') ? ag.platform_awareness : {};
   if (pa.discord)  state.pa_discord  = pa.discord;
@@ -464,67 +479,37 @@ function toggleCard(checkbox, bodyId) {
 }
 
 // ============================================================
-// Step 4 — Personality & Purpose
+// Step 4 — Identity
 // ============================================================
 
 function buildStep4() {
   return `
-    <h2 class="step-heading">Personality & Purpose</h2>
-    <p class="step-desc">Describe who your agent is, how they behave, and what they help with.</p>
+    <h2 class="step-heading">Identity</h2>
+    <p class="step-desc">Define who your agent is, how they feel, and who they're for. Each file is loaded into the system prompt on every message.</p>
     <div class="form-group">
-      <label for="f-personality">Personality</label>
-      <textarea id="f-personality" class="form-textarea" rows="8">${esc(state.personality)}</textarea>
-      <p class="form-hint">Who they are, their tone, what they help with, and what makes them distinctly them. No more than one paragraph.</p>
+      <label for="f-agent-md">Agent <span class="label-opt">(agent.md)</span></label>
+      <textarea id="f-agent-md" class="form-textarea" rows="10">${esc(state.agent_md)}</textarea>
+      <p class="form-hint">Role, purpose, behaviors, boundaries, and roleplay rules.</p>
+    </div>
+    <div class="form-group" style="margin-top:1.5rem">
+      <label for="f-soul-md">Soul <span class="label-opt">(soul.md)</span></label>
+      <textarea id="f-soul-md" class="form-textarea" rows="6">${esc(state.soul_md)}</textarea>
+      <p class="form-hint">Tone, humor, quirks, and conversational style.</p>
+    </div>
+    <div class="form-group" style="margin-top:1.5rem">
+      <label for="f-user-md">User Profile <span class="label-opt">(user.md)</span></label>
+      <textarea id="f-user-md" class="form-textarea" rows="5">${esc(state.user_md)}</textarea>
+      <p class="form-hint">Describes the agent's owner — you. Used to personalise every response.</p>
     </div>`;
 }
 
 function collectStep4() {
-  state.personality = val('f-personality');
+  state.agent_md = val('f-agent-md');
+  state.soul_md  = val('f-soul-md');
+  state.user_md  = val('f-user-md');
 }
-
-// ============================================================
-// Step 5 — Boundaries
-// ============================================================
 
 function buildStep5() {
-  return `
-    <h2 class="step-heading">Boundaries</h2>
-    <p class="step-desc">Define what your agent won't do.</p>
-    <div class="form-group">
-      <label for="f-boundaries">Hard Limits</label>
-      <textarea id="f-boundaries" class="form-textarea" rows="4">${esc(state.boundaries)}</textarea>
-      <p class="form-hint">Non-negotiable regardless of framing or roleplay context. No more than 2–3 sentences.</p>
-    </div>`;
-}
-
-function collectStep5() {
-  state.boundaries = val('f-boundaries');
-}
-
-// ============================================================
-// Step 6 — Roleplay
-// ============================================================
-
-function buildStep6() {
-  return `
-    <h2 class="step-heading">Roleplay Rules</h2>
-    <p class="step-desc">Define how your agent handles creative fiction and narrative scenarios.</p>
-    <div class="form-group">
-      <label for="f-roleplay">Roleplay Guidelines</label>
-      <textarea id="f-roleplay" class="form-textarea" rows="4">${esc(state.roleplay_rules)}</textarea>
-      <p class="form-hint">When to engage, when to break character, what scenarios are welcome. No more than 2–3 sentences.</p>
-    </div>`;
-}
-
-function collectStep6() {
-  state.roleplay_rules = val('f-roleplay');
-}
-
-// ============================================================
-// Step 7 — Tools
-// ============================================================
-
-function buildStep7() {
   const showSL = state.sl_enabled;
   return `
     <h2 class="step-heading">Tools & Capabilities</h2>
@@ -588,7 +573,7 @@ function buildStep7() {
     </div>` : ''}`;
 }
 
-function collectStep7() {
+function collectStep5() {
   state.web_search_enabled = chk('f-search-on');
   state.search_provider    = val('f-search-provider') || state.search_provider;
   state.search_api_key     = val('f-search-key') || state.search_api_key;
@@ -598,10 +583,10 @@ function collectStep7() {
 }
 
 // ============================================================
-// Step 8 — Context & Platform Awareness
+// Step 6 — Context & Platform Awareness
 // ============================================================
 
-function buildStep8() {
+function buildStep6() {
   const paSections = [];
   if (state.discord_enabled)
     paSections.push(`
@@ -640,7 +625,7 @@ function buildStep8() {
     </div>` : '<p class="text-dim" style="margin-top:1.5rem">Enable platforms in Step 3 to configure their awareness blocks here.</p>'}`;
 }
 
-function collectStep8() {
+function collectStep6() {
   state.additional_context = val('f-extra');
   const d = document.getElementById('f-pa-discord');
   const s = document.getElementById('f-pa-sl');
@@ -651,10 +636,10 @@ function collectStep8() {
 }
 
 // ============================================================
-// Step 9 — Review & Save
+// Step 7 — Review & Save
 // ============================================================
 
-function buildStep9() {
+function buildStep7() {
   const modelLabel = state.model_provider === 'ollama'
     ? `Ollama — ${state.ollama_model}`
     : state.claude_model;
@@ -704,13 +689,13 @@ function buildStep9() {
 // ============================================================
 
 const builders = {
-  1: buildStep1, 2: buildStep2, 3: buildStep3, 4: buildStep4,
-  5: buildStep5, 6: buildStep6, 7: buildStep7, 8: buildStep8, 9: buildStep9,
+  1: buildStep1, 2: buildStep2, 3: buildStep3,
+  4: buildStep4, 5: buildStep5, 6: buildStep6, 7: buildStep7,
 };
 const binders = { 1: bindStep1 };
 const collectors = {
-  1: collectStep1, 2: collectStep2, 3: collectStep3, 4: collectStep4,
-  5: collectStep5, 6: collectStep6, 7: collectStep7, 8: collectStep8,
+  1: collectStep1, 2: collectStep2, 3: collectStep3,
+  4: collectStep4, 5: collectStep5, 6: collectStep6,
 };
 
 function renderStep(n) {
@@ -743,11 +728,12 @@ async function save() {
       OWNER_NAME:                  state.owner_name,
     },
     agent_config: {
-      agent_name:        state.agent_name,
-      personality:       state.personality,
-      boundaries:        state.boundaries,
-      boundary_response: state.boundary_response,
-      roleplay_rules:    state.roleplay_rules,
+      agent_name: state.agent_name,
+      identity: {
+        agent_md: state.agent_md,
+        soul_md:  state.soul_md,
+        user_md:  state.user_md,
+      },
       additional_context: state.additional_context,
       platform_awareness: {
         discord: state.pa_discord,

@@ -4,6 +4,7 @@ from typing import Any
 
 from config.settings import Settings
 from core.persona import MessageContext
+from memory.session_index import SessionIndex
 
 
 # ------------------------------------------------------------------ schemas
@@ -104,12 +105,72 @@ NOTE_LIST_SCHEMA = {
     "input_schema": {"type": "object", "properties": {}, "required": []},
 }
 
+SESSION_SEARCH_SCHEMA = {
+    "name": "session_search",
+    "description": (
+        "Search your past conversation history for a specific topic, person, place, or event. "
+        "Use this when you want to recall something from a previous session that isn't in your "
+        "current context. Returns timestamped snippets with platform and date context."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Keywords or phrase to search for in past conversations.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max results to return. Default 5, max 10.",
+                "default": 5,
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+MEMORY_SCHEMA = {
+    "name": "memory",
+    "description": (
+        "Curate your persistent memory. Two stores are available:\n"
+        "  'memory' — your notes about context, facts, and the world (~2,000 chars).\n"
+        "  'user'   — the owner's profile: their preferences, style, background (~1,200 chars).\n"
+        "Both are injected into every system prompt. Use this to remember what matters and "
+        "forget what doesn't. Do not announce that you are updating memory."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["add", "replace", "remove"],
+                "description": "'add' appends a new entry. 'replace' rewrites part of an entry. 'remove' deletes an entry.",
+            },
+            "store": {
+                "type": "string",
+                "enum": ["memory", "user"],
+                "description": "Which memory file to update.",
+            },
+            "text": {
+                "type": "string",
+                "description": "Entry text for 'add', or replacement text for 'replace'.",
+            },
+            "old_text": {
+                "type": "string",
+                "description": "Substring to match for 'replace' or 'remove'.",
+            },
+        },
+        "required": ["action", "store"],
+    },
+}
+
 
 # ------------------------------------------------------------------ registry
 
 class ToolRegistry:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, session_index: SessionIndex | None = None) -> None:
         self._settings = settings
+        self._session_index = session_index
 
     def get_definitions(self, context: MessageContext) -> list[dict]:
         from core.persona import get_agent_config
@@ -122,6 +183,9 @@ class ToolRegistry:
             tools.extend([NOTE_WRITE_SCHEMA, NOTE_READ_SCHEMA, NOTE_LIST_SCHEMA])
         if context.platform == "sl" and cfg_tools.get("sl_action", True):
             tools.append(SL_ACTION_SCHEMA)
+        tools.append(MEMORY_SCHEMA)
+        if self._session_index is not None:
+            tools.append(SESSION_SEARCH_SCHEMA)
         return tools
 
     async def dispatch(
@@ -132,6 +196,8 @@ class ToolRegistry:
         action_queue: list[dict],
     ) -> str:
         from core.tool_handlers import notes, sl_action, web_search
+        from core.tool_handlers.memory import handle_memory
+        from core.tool_handlers.session_search import handle_session_search
         if name == "web_search":
             return await web_search.handle_web_search(
                 tool_input,
@@ -147,5 +213,11 @@ class ToolRegistry:
             return await notes.handle_note_read(tool_input, context, self._settings.notes_dir)
         elif name == "note_list":
             return await notes.handle_note_list(tool_input, context, self._settings.notes_dir)
+        elif name == "memory":
+            return await handle_memory(tool_input, context, self._settings.memory_dir)
+        elif name == "session_search":
+            if self._session_index is None:
+                return "Session search is not available."
+            return await handle_session_search(tool_input, context, self._session_index)
         else:
             return f"Unknown tool: {name}"

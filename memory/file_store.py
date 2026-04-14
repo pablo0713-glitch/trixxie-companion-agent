@@ -10,14 +10,21 @@ import aiofiles
 
 from memory.base import AbstractMemoryStore
 from memory.schemas import ConversationFile, FactsFile
+from memory.session_index import SessionIndex
 
 
 class FileMemoryStore(AbstractMemoryStore):
     """Phase 1 memory: JSON files on disk, one per user/channel pair."""
 
-    def __init__(self, memory_dir: str, max_history: int) -> None:
+    def __init__(
+        self,
+        memory_dir: str,
+        max_history: int,
+        session_index: SessionIndex | None = None,
+    ) -> None:
         self._memory_dir = memory_dir
         self._max_history = max_history
+        self._session_index = session_index
         # Per-(user_id, channel_id) locks to prevent write races
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
 
@@ -74,6 +81,15 @@ class FileMemoryStore(AbstractMemoryStore):
                 cf.turns = cf.turns[-self._max_history :]
 
             await _write_json(path, _cf_to_dict(cf))
+
+        if self._session_index is not None:
+            text = content if isinstance(content, str) else _text_from_content(content)
+            if text:
+                asyncio.create_task(
+                    self._session_index.index_turn(
+                        user_id, channel_id, platform, role, text, _now()
+                    )
+                )
 
     async def trim_history(self, user_id: str, channel_id: str, max_turns: int) -> None:
         async with self._lock(user_id, channel_id):
@@ -143,6 +159,23 @@ async def _read_json(path: str) -> dict | None:
         return json.loads(raw)
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def _text_from_content(content: Any) -> str:
+    """Extract a plain-text string from a content block list for indexing."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+            elif hasattr(item, "type") and str(item.type) == "text":
+                parts.append(getattr(item, "text", ""))
+        return " ".join(p for p in parts if p)
+    return ""
 
 
 def _serialize_content(content: Any) -> Any:

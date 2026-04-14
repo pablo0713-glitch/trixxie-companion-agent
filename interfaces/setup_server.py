@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 _ROOT = Path(__file__).parent.parent
 _ENV_PATH = _ROOT / ".env"
 _CONFIG_PATH = _ROOT / "data" / "agent_config.json"
+_IDENTITY_DIR = _ROOT / "data" / "identity"
 _SETUP_DIR = _ROOT / "setup"
 
 _PERSON_MAP_PATH = _ROOT / "data" / "person_map.json"
@@ -73,6 +74,17 @@ def create_setup_router() -> APIRouter:
             from core.persona import get_default_config
             agent_cfg = get_default_config()
 
+        # Load identity files (agent.md, soul.md, user.md)
+        from core.persona import get_default_identity
+        defaults = get_default_identity()
+        identity: dict[str, str] = {}
+        for fname in ("agent.md", "soul.md", "user.md"):
+            key = fname.replace(".", "_")  # agent_md, soul_md, user_md
+            fpath = _IDENTITY_DIR / fname
+            identity[key] = fpath.read_text(encoding="utf-8") if fpath.exists() else ""
+
+        agent_cfg["identity"] = identity
+
         return JSONResponse({"env": env_vals, "agent_config": agent_cfg})
 
     @router.post("/setup/config")
@@ -81,6 +93,19 @@ def create_setup_router() -> APIRouter:
             # Update .env — skip any value that is still the mask
             env_updates = {k: v for k, v in body.env.items() if v != _MASK}
             _write_dotenv(env_updates)
+
+            # Write identity files (agent.md, soul.md, user.md) if provided
+            identity = body.agent_config.pop("identity", None)
+            if isinstance(identity, dict):
+                _IDENTITY_DIR.mkdir(parents=True, exist_ok=True)
+                from core.persona import get_default_identity
+                defaults = get_default_identity()
+                for fname in ("agent.md", "soul.md", "user.md"):
+                    key = fname.replace(".", "_")
+                    content = identity.get(key, "").strip()
+                    if not content:
+                        content = defaults.get(fname, "")
+                    (_IDENTITY_DIR / fname).write_text(content, encoding="utf-8")
 
             # Write agent_config.json
             _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
