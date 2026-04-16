@@ -128,6 +128,7 @@ def create_debug_router(sensor_store: "SensorStore", agent_core: "AgentCore") ->
             result[uid] = {
                 "last_prompt": prompt_text,
                 "prompt_chars": len(prompt_text),
+                "prompt_sections": exchange.get("prompt_sections") if exchange else None,
                 "last_exchange": {
                     "ts": exchange.get("ts"),
                     "ts_fmt": datetime.fromtimestamp(exchange["ts"], tz=timezone.utc)
@@ -206,11 +207,30 @@ _DEBUG_HTML = """<!DOCTYPE html>
   .user-item:hover, .user-item.active { background: var(--border); color: var(--accent); }
   .user-item .uid { color: var(--dim); font-size: 10px; display: block; margin-top: 2px; }
   .prompt-detail { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
-  .prompt-meta { font-size: 11px; color: var(--dim); flex-shrink: 0; }
+  .prompt-meta { font-size: 11px; color: var(--dim); flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
+  .view-toggle { display: flex; gap: 4px; margin-left: auto; }
+  .view-toggle button { padding: 2px 10px; font-size: 11px; }
+  .view-toggle button.active { border-color: var(--accent); color: var(--accent); }
   .prompt-sections { flex: 1; display: grid; grid-template-rows: 1fr 2fr 1fr; gap: 8px; overflow: hidden; }
   .prompt-section { display: flex; flex-direction: column; overflow: hidden; }
   .prompt-section h4 { font-size: 11px; color: var(--dim); margin-bottom: 4px; flex-shrink: 0; }
   .prompt-pre { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 8px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; font-size: 11px; color: var(--text); }
+  .blocks-view { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .blk { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-size: 11px; }
+  .blk-hdr { color: var(--accent); font-weight: bold; font-size: 12px; margin-bottom: 10px; }
+  .blk-hdr .blk-tag { font-size: 10px; font-weight: normal; color: var(--dim); margin-left: 8px; }
+  .blk-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .blk-label { color: var(--info); min-width: 140px; }
+  .blk-chars { color: var(--dim); min-width: 70px; text-align: right; }
+  .blk-bar-wrap { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .blk-bar { height: 100%; background: var(--accent); border-radius: 3px; opacity: 0.5; }
+  .blk-divider { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+  .blk-section-hdr { color: var(--warning); margin: 8px 0 4px; font-size: 11px; }
+  .blk-usage { color: var(--dim); font-size: 10px; margin-left: 6px; }
+  .blk-entry { padding: 3px 0 3px 12px; color: var(--text); border-left: 2px solid var(--border); margin: 2px 0; white-space: pre-wrap; word-break: break-all; }
+  .blk-empty { color: var(--dim); font-style: italic; padding: 2px 0; }
+  .blk-ref { color: var(--dim); }
+  .blk-ref a { color: var(--info); cursor: pointer; text-decoration: underline; }
   .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-right: 4px; }
   .badge.sl { background: #1e3a5f; color: #60a5fa; }
   .badge.discord { background: #1e2a5f; color: #818cf8; }
@@ -506,9 +526,143 @@ function selectUser(el) {
   renderPromptDetail(uid);
 }
 
+let promptViewMode = localStorage.getItem('promptView') || 'blocks';
+
+function setPromptView(mode) {
+  promptViewMode = mode;
+  localStorage.setItem('promptView', mode);
+  document.querySelectorAll('.view-toggle button').forEach(b => {
+    b.classList.toggle('active', b.dataset.view === mode);
+  });
+  document.querySelectorAll('.prompt-raw-view, .prompt-blocks-view').forEach(el => {
+    el.style.display = 'none';
+  });
+  const active = document.querySelector('.' + (mode === 'raw' ? 'prompt-raw-view' : 'prompt-blocks-view'));
+  if (active) active.style.display = 'flex';
+}
+
 function fmtBytes(n) {
   if (n < 1024) return n + ' chars';
   return (n / 1024).toFixed(1) + 'k chars';
+}
+
+function fmtBar(chars, max) {
+  const pct = max > 0 ? Math.round(chars / max * 100) : 0;
+  return '<div class="blk-bar-wrap"><div class="blk-bar" style="width:' + pct + '%"></div></div>';
+}
+
+function renderBlocksView(uid) {
+  const d = promptData[uid];
+  const ps = d && d.prompt_sections;
+  if (!ps) return '<div class="empty">No prompt sections data yet. Send a message first.</div>';
+
+  let html = '<div class="blocks-view">';
+
+  // ── Block 0
+  html += '<div class="blk">';
+  html += '<div class="blk-hdr">Block 0 <span class="blk-tag">static · cache_control: ephemeral · ' + fmtBytes(ps.block0_chars) + '</span></div>';
+
+  // Identity files
+  if (ps.identity_fallback) {
+    html += '<div class="blk-row"><span class="blk-label">[Identity]</span><span class="blk-chars" style="color:var(--warning)">config fallback (agent_config.json)</span></div>';
+  } else {
+    const files = ps.identity_files || {};
+    const fileNames = Object.keys(files);
+    const maxChars = fileNames.length ? Math.max(...fileNames.map(f => files[f])) : 1;
+    fileNames.forEach(fname => {
+      const c = files[fname];
+      html += '<div class="blk-row">' +
+        '<span class="blk-label" style="color:var(--dim)">' + esc(fname) + '</span>' +
+        '<span class="blk-chars">' + fmtBytes(c) + '</span>' +
+        fmtBar(c, maxChars) +
+        '</div>';
+    });
+  }
+
+  // Platform awareness
+  html += '<div class="blk-row">' +
+    '<span class="blk-label">[Platform awareness — ' + esc(ps.platform || '?') + ']</span>' +
+    '<span class="blk-chars">' + (ps.platform_awareness_chars ? fmtBytes(ps.platform_awareness_chars) : '<span style="color:var(--dim)">—</span>') + '</span>' +
+    '</div>';
+
+  // Additional context
+  const addlColor = ps.additional_context_chars ? 'var(--text)' : 'var(--dim)';
+  html += '<div class="blk-row">' +
+    '<span class="blk-label" style="color:' + addlColor + '">[Additional context]</span>' +
+    '<span class="blk-chars" style="color:' + addlColor + '">' + (ps.additional_context_chars ? fmtBytes(ps.additional_context_chars) : '—') + '</span>' +
+    '</div>';
+
+  // MEMORY.md + USER.md
+  const memText = ps.memory_files_text || '';
+  if (memText) {
+    html += '<hr class="blk-divider">';
+    // Parse the two labelled sections out of the formatted memory string
+    const memSections = parseMemorySections(memText);
+    for (const sec of memSections) {
+      html += '<div class="blk-section-hdr">' + esc(sec.header) + '<span class="blk-usage">' + esc(sec.usage) + '</span></div>';
+      if (sec.entries.length) {
+        sec.entries.forEach(e => {
+          html += '<div class="blk-entry">' + esc(e) + '</div>';
+        });
+      } else {
+        html += '<div class="blk-empty">(empty)</div>';
+      }
+    }
+  } else {
+    html += '<hr class="blk-divider"><div class="blk-empty">MEMORY.md / USER.md — not loaded (no person_id or files empty)</div>';
+  }
+
+  html += '</div>'; // end Block 0
+
+  // ── Block 1
+  if (ps.has_block1) {
+    html += '<div class="blk">';
+    html += '<div class="blk-hdr">Block 1 <span class="blk-tag">dynamic · no cache · ' + fmtBytes(ps.block1_chars) + '</span></div>';
+
+    // STM bridge
+    const stm = ps.stm_bridge_text || '';
+    if (stm) {
+      const stmLines = stm.split('\\n---\\n').map(s => s.replace(/^##[^\\n]*\\n/, '').trim()).filter(Boolean);
+      html += '<div class="blk-section-hdr">STM bridge</div>';
+      stmLines.forEach(line => {
+        html += '<div class="blk-entry">' + esc(line) + '</div>';
+      });
+    } else {
+      html += '<div class="blk-empty">STM bridge — no linked platform uids with entries</div>';
+    }
+
+    // Sensor context + locations — reference to Sensors tab
+    const sensorChars = ps.block1_chars - ps.stm_bridge_chars;
+    html += '<hr class="blk-divider">';
+    html += '<div class="blk-row blk-ref">' +
+      '<span class="blk-label">Sensor context + locations</span>' +
+      '<span class="blk-chars">' + (sensorChars > 0 ? fmtBytes(sensorChars) : '—') + '</span>' +
+      '<span style="margin-left:8px"><a onclick="switchTab(\\'sensors\\')">→ Sensors tab</a></span>' +
+      '</div>';
+
+    html += '</div>'; // end Block 1
+  }
+
+  html += '</div>'; // end blocks-view
+  return html;
+}
+
+function parseMemorySections(text) {
+  // Splits §-delimited MEMORY/USER sections from the formatted memory_files string
+  const sections = [];
+  const sectionRe = /^((?:MEMORY|USER)[^\\n]+)\\n([\\s\\S]*?)(?=^(?:MEMORY|USER)[^\\n]+\\n|$)/gm;
+  let m;
+  while ((m = sectionRe.exec(text + '\\n')) !== null) {
+    const headerLine = m[1].trim();
+    // Split header into label + usage bracket
+    const bracketIdx = headerLine.indexOf('[');
+    const header = bracketIdx > -1 ? headerLine.slice(0, bracketIdx).trim() : headerLine;
+    const usage = bracketIdx > -1 ? headerLine.slice(bracketIdx) : '';
+    const body = m[2] || '';
+    const entries = body.split('§').map(e => e.trim()).filter(Boolean);
+    sections.push({ header, usage, entries });
+  }
+  return sections;
 }
 
 function renderPromptDetail(uid) {
@@ -520,11 +674,18 @@ function renderPromptDetail(uid) {
   const msgsTurns = ex ? (ex.messages_turns || 0) : 0;
   const totalChars = promptChars + msgsChars;
   const detail = document.getElementById('prompt-detail');
-  detail.innerHTML =
+
+  const metaHtml =
     '<div class="prompt-meta">' +
     (ex ? ex.ts_fmt + ' &nbsp;|&nbsp; ' + ex.platform : 'No exchange yet') +
     (totalChars ? ' &nbsp;|&nbsp; <span style="color:var(--accent)">~' + fmtBytes(totalChars) + ' total</span>' : '') +
-    '</div>' +
+    '<div class="view-toggle">' +
+    '<button data-view="blocks" onclick="setPromptView(\\'blocks\\')">Blocks</button>' +
+    '<button data-view="raw" onclick="setPromptView(\\'raw\\')">Raw</button>' +
+    '</div></div>';
+
+  const rawHtml =
+    '<div class="prompt-raw-view" style="flex:1;display:flex;flex-direction:column;gap:8px;overflow:hidden">' +
     '<div class="prompt-sections">' +
     '<div class="prompt-section"><h4>System Prompt &nbsp;<span style="color:var(--dim);font-weight:normal">' + fmtBytes(promptChars) + '</span></h4>' +
     '<pre class="prompt-pre">' + esc(d.last_prompt || '') + '</pre></div>' +
@@ -535,7 +696,17 @@ function renderPromptDetail(uid) {
     '<div class="prompt-section"><h4>Last Exchange</h4>' +
     '<pre class="prompt-pre">' +
     (ex ? esc('USER: ' + ex.user_message + '\\n\\n---\\n\\nREPLY: ' + ex.reply_text) : 'No exchange yet') +
-    '</pre></div></div>';
+    '</pre></div></div></div>';
+
+  const blocksHtml =
+    '<div class="prompt-blocks-view" style="flex:1;overflow:hidden;display:flex;flex-direction:column">' +
+    renderBlocksView(uid) +
+    '</div>';
+
+  detail.innerHTML = metaHtml + rawHtml + blocksHtml;
+
+  // Apply stored view preference
+  setPromptView(promptViewMode);
 }
 
 // ── Utilities ──

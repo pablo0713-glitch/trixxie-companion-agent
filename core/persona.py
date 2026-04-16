@@ -196,6 +196,19 @@ def get_default_identity() -> dict[str, str]:
     return dict(_DEFAULT_IDENTITY)
 
 
+def get_identity_files_meta() -> dict[str, int]:
+    """Return {filename: char_count} for each identity file that exists."""
+    result: dict[str, int] = {}
+    for fname in ("agent.md", "soul.md", "user.md"):
+        path = _IDENTITY_DIR / fname
+        if path.exists():
+            try:
+                result[fname] = len(path.read_text(encoding="utf-8").strip())
+            except OSError:
+                pass
+    return result
+
+
 def _load_identity_files() -> str:
     """Load agent.md, soul.md, user.md from data/identity/.
 

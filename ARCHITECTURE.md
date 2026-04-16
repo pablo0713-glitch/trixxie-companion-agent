@@ -334,6 +334,8 @@ Each canonical `person_id` has two bounded files in `data/memory/{safe_person_id
 
 Both use `§`-delimited entries. The agent curates these in real time via the `memory` tool (add / replace / remove). They are loaded once at the start of each `handle_message()` call and injected **frozen** into Block 0 — content doesn't change mid-session, which maximises cache stability.
 
+Cap enforcement in `_load_memory_files()` calls `_trim_to_cap()` (entry-aware: drops oldest `§` entries until the file fits) — not a raw character slice. This ensures no entry is ever split mid-text at load time.
+
 Injection format:
 ```
 MEMORY (agent's notes) [42% — 840/2,000 chars]

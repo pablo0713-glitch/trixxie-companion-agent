@@ -14,7 +14,13 @@ import aiofiles
 
 from config.settings import Settings
 from core.model_adapter import ModelAdapter
-from core.persona import MessageContext, build_system_prompt_blocks, get_agent_config
+from core.persona import (
+    MessageContext,
+    build_system_prompt_blocks,
+    get_agent_config,
+    get_identity_files_meta,
+    _get_platform_awareness,
+)
 from core.rate_limiter import RateLimiter
 from core.tools import ToolRegistry
 from memory.base import AbstractMemoryStore
@@ -83,6 +89,26 @@ class AgentCore:
         # Flatten for debug display (blocks are passed directly to the adapter)
         system_flat = "\n\n".join(b["text"] for b in system_blocks)
         self._last_prompt[context.user_id] = system_flat
+
+        # Structured metadata for the debug "Prompt Blocks" view
+        _cfg = get_agent_config()
+        _pa = _get_platform_awareness(_cfg, context.platform)
+        _addl = _cfg.get("additional_context", "") or ""
+        _identity_meta = get_identity_files_meta()
+        _prompt_sections = {
+            "identity_files": _identity_meta,
+            "identity_fallback": not bool(_identity_meta),
+            "platform": context.platform,
+            "platform_awareness_chars": len(_pa),
+            "additional_context_chars": len(_addl.strip()),
+            "memory_files_text": memory_files,
+            "memory_files_chars": len(memory_files),
+            "stm_bridge_text": stm_bridge,
+            "stm_bridge_chars": len(stm_bridge),
+            "block0_chars": len(system_blocks[0]["text"]) if system_blocks else 0,
+            "block1_chars": len(system_blocks[1]["text"]) if len(system_blocks) > 1 else 0,
+            "has_block1": len(system_blocks) > 1,
+        }
         messages = list(history) + [{"role": "user", "content": message}]
 
         await self._memory.append_turn(
@@ -102,6 +128,7 @@ class AgentCore:
                 "messages": messages,
                 "reply_text": reply_text,
                 "assistant_turns": assistant_turns,
+                "prompt_sections": _prompt_sections,
             }
         except Exception as exc:
             logger.exception("Error in tool loop: %s", exc)
@@ -152,9 +179,10 @@ class AgentCore:
                 continue
             if not content:
                 continue
-            # Enforce cap
+            # Enforce cap — trim by §-delimited entries, not raw slice
             if len(content) > cap:
-                content = content[:cap]
+                from core.tool_handlers.memory import _trim_to_cap
+                content = _trim_to_cap(content, cap)
             pct = int(len(content) * 100 / cap)
             header = f"{label} [{pct}% — {len(content)}/{cap} chars]"
             parts.append(f"{header}\n{content}")

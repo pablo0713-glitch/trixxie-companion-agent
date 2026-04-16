@@ -2,6 +2,8 @@
 .venv/
 data/memory/
 data/notes/
+data/agent_config.json
+data/identity/
 __pycache__/
 *.pyc
 *.pyo

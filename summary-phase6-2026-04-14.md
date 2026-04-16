@@ -169,6 +169,12 @@ messages=[{
 }]
 ```
 
+### `_load_memory_files()` — raw slice on cap enforcement
+
+`_load_memory_files()` in `core/agent.py` enforced the char cap via `content[:cap]` — a raw character slice that could split an entry mid-sentence. Fixed by calling `_trim_to_cap()` (same entry-aware function used by the `memory` tool write path), which drops oldest `§` entries until the file fits. Symptom: the debug panel's MEMORY section showed only the first entry (61 chars) with the remaining ~1,900 chars silently intact but unsplit.
+
+---
+
 ### SessionIndex schema init — incomplete input
 
 `_ensure_ready()` split the schema on `;` to execute statements individually. The `CREATE TRIGGER ... BEGIN ... END;` statement contains an inner semicolon, so splitting produced a truncated fragment (`incomplete input` from SQLite). Fixed by replacing the single string + split approach with an explicit list of statement strings.
@@ -215,4 +221,5 @@ Blocked writes log a `WARNING` with person_id and the first 80 chars of the offe
 | `main.py` | Instantiates `SessionIndex`; passes to `FileMemoryStore` and `ToolRegistry` |
 | `requirements.txt` | Added `aiosqlite>=0.20.0` |
 | `core/agent.py` | Fixed STM append — messages array now ends with user turn |
+| `core/agent.py` | Fixed `_load_memory_files()` cap — `_trim_to_cap()` replaces raw `content[:cap]` slice |
 | `memory/session_index.py` | Fixed schema init — list of statements replaces split-on-semicolon |
