@@ -54,7 +54,7 @@ class FileMemoryStore(AbstractMemoryStore):
         if data is None:
             return []
         cf = ConversationFile.model_validate(data)
-        return cf.turns
+        return _sanitize_tool_pairs(cf.turns)
 
     async def append_turn(
         self,
@@ -79,7 +79,7 @@ class FileMemoryStore(AbstractMemoryStore):
             cf.updated_at = _now()
 
             if len(cf.turns) > self._max_history:
-                cf.turns = cf.turns[-self._max_history :]
+                cf.turns = _sanitize_tool_pairs(cf.turns[-self._max_history :])
 
             await _write_json(path, _cf_to_dict(cf))
 
@@ -100,7 +100,7 @@ class FileMemoryStore(AbstractMemoryStore):
                 return
             cf = ConversationFile.model_validate(data)
             if len(cf.turns) > max_turns:
-                cf.turns = cf.turns[-max_turns:]
+                cf.turns = _sanitize_tool_pairs(cf.turns[-max_turns:])
                 cf.updated_at = _now()
                 await _write_json(path, _cf_to_dict(cf))
 
@@ -218,3 +218,77 @@ def _cf_to_dict(cf) -> dict:
 async def _write_json(path: str, data: dict) -> None:
     async with aiofiles.open(path, "w", encoding="utf-8") as f:
         await f.write(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def _sanitize_tool_pairs(turns: list[dict]) -> list[dict]:
+    """Drop orphaned tool_result / tool_use blocks left by history trimming.
+
+    History trim is a naive tail-slice that can cut an assistant tool_use turn
+    without removing the following user tool_result turn, producing a 400 from
+    the Anthropic API ("unexpected tool_use_id in tool_result blocks").
+
+    Pass 1 — drop tool_result blocks whose tool_use_id has no matching tool_use
+              in the immediately preceding assistant turn.
+    Pass 2 — drop tool_use blocks from assistant turns that have no matching
+              tool_result in the immediately following user turn (can occur when
+              pass 1 empties that user turn and drops it entirely).
+    """
+    if len(turns) < 2:
+        return turns
+
+    # Pass 1
+    p1: list[dict] = []
+    for turn in turns:
+        content = turn.get("content")
+        if turn.get("role") == "user" and isinstance(content, list):
+            valid_ids: set[str] = set()
+            if p1 and p1[-1].get("role") == "assistant":
+                prev = p1[-1].get("content", [])
+                if isinstance(prev, list):
+                    valid_ids = {
+                        b["id"] for b in prev
+                        if isinstance(b, dict) and b.get("type") == "tool_use" and "id" in b
+                    }
+            filtered = [
+                b for b in content
+                if not (
+                    isinstance(b, dict)
+                    and b.get("type") == "tool_result"
+                    and b.get("tool_use_id") not in valid_ids
+                )
+            ]
+            if not filtered:
+                continue
+            p1.append({**turn, "content": filtered})
+        else:
+            p1.append(turn)
+
+    # Pass 2
+    final: list[dict] = []
+    for i, turn in enumerate(p1):
+        content = turn.get("content")
+        if turn.get("role") == "assistant" and isinstance(content, list):
+            tool_use_ids = {
+                b["id"] for b in content
+                if isinstance(b, dict) and b.get("type") == "tool_use" and "id" in b
+            }
+            if tool_use_ids:
+                nxt = p1[i + 1].get("content", []) if i + 1 < len(p1) else []
+                served = {
+                    b.get("tool_use_id")
+                    for b in (nxt if isinstance(nxt, list) else [])
+                    if isinstance(b, dict) and b.get("type") == "tool_result"
+                }
+                orphaned = tool_use_ids - served
+                if orphaned:
+                    filtered = [
+                        b for b in content
+                        if not (isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") in orphaned)
+                    ]
+                    if not filtered:
+                        continue
+                    final.append({**turn, "content": filtered})
+                    continue
+        final.append(turn)
+
+    return final
