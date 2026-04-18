@@ -112,7 +112,8 @@ class AgentCore:
         messages = list(history) + [{"role": "user", "content": message}]
 
         await self._memory.append_turn(
-            context.user_id, context.channel_id, context.platform, "user", message
+            context.user_id, context.channel_id, context.platform, "user", message,
+            context.display_name,
         )
 
         sl_action_queue: list[dict] = []
@@ -123,6 +124,7 @@ class AgentCore:
             self._last_exchange[context.user_id] = {
                 "ts": time.time(),
                 "platform": context.platform,
+                "display_name": context.display_name,
                 "user_message": message,
                 "system_prompt": system_flat,
                 "messages": messages,

@@ -107,6 +107,17 @@ To chat with her in SL, speak on channel 42:
 
 Nobody else sees channel 42 messages. Her reply arrives as a private IM from her avatar.
 
+#### Name trigger — local chat
+
+You can also mention her name in open local chat (channel 0) and she'll respond publicly:
+
+```
+Hey Trixxie, what do you think of this sim?
+Trix, come look at this outfit!
+```
+
+Any name in the `TRIGGER_NAMES` list at the top of the HUD script counts — default is `["Trixxie", "Trix"]`. Add aliases freely. Her reply appears in local chat, visible to everyone nearby (it comes from the HUD object, not her avatar, so it shows in a slightly different color).
+
 > **Setup required:** See [Second Life Setup](#second-life-setup) below.
 
 ### Cool VL Viewer (Lua — native IM)
@@ -238,7 +249,8 @@ companion-agent/
 │       ├── sl_action.py         # SL action queue
 │       ├── notes.py             # Persistent note storage
 │       ├── memory.py            # Curate MEMORY.md / USER.md
-│       └── session_search.py    # Full-text search over past sessions
+│       ├── session_search.py    # Full-text search over past sessions
+│       └── session_query.py     # Structured SQL query (speakers/turns modes)
 ├── memory/
 │   ├── base.py                  # Abstract memory interface
 │   ├── file_store.py            # File-based implementation + FTS indexing
@@ -246,6 +258,7 @@ companion-agent/
 │   ├── session_index.py         # SQLite FTS5 index of all turns
 │   ├── person_map.py            # Discord + SL identity linking
 │   ├── location_store.py        # SL region/parcel visit history
+│   ├── avatar_store.py          # SL avatar registry (display names, channels, first/last seen)
 │   └── schemas.py               # Data models
 ├── interfaces/
 │   ├── setup_server.py          # Setup wizard API router (/setup)
@@ -257,8 +270,7 @@ companion-agent/
 │   ├── style.css                # Dark theme
 │   └── wizard.js                # 7-step wizard
 ├── lsl/
-│   ├── companion_bridge.lsl     # HUD script worn by the agent's avatar
-│   └── ARCHITECTURE.md          # LSL internals, sensor formats, timer schedule
+│   └── companion_bridge.lsl     # HUD script worn by the agent's avatar
 ├── lua/
 │   ├── trixxie_companion.lua    # Cool VL Viewer automation script (native IM loop)
 │   └── README.md                # Setup instructions for Lua interface
@@ -296,8 +308,8 @@ Roleplay is welcome. Fantasy combat and light narrative games are fine.
 - Check that `run.sh` is running and the bridge started on port 8080
 - Verify cloudflared is running and the tunnel URL is current (it changes on each restart unless you use a named tunnel)
 
-**Garbled characters (`â`) in SL replies:**
-- This should be fixed automatically — the bridge normalizes smart quotes and em dashes to ASCII before sending
+**Garbled characters (`â`, `ð`) in SL replies:**
+- The bridge normalizes smart quotes and em dashes to ASCII, and strips emoji (non-BMP Unicode) before sending — LSL cannot handle 4-byte UTF-8 sequences. If you still see garbled bytes, check that you're running the latest `interfaces/sl_bridge/formatters.py`.
 
 ---
 

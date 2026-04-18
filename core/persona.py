@@ -57,6 +57,7 @@ _DEFAULT_CONFIG: dict = {
         "web_search": True,
         "notes": True,
         "sl_action": True,
+        "voice": False,
     },
     "platform_awareness": {
         "discord": (
@@ -91,18 +92,30 @@ _DEFAULT_CONFIG: dict = {
             "- assume sensory data is real-time\n\n"
             "**Style:**\n"
             "- keep IMs concise\n"
-            "- use *asterisk emotes* when natural\n\n"
+            "- use *asterisk emotes* when natural\n"
+            "- text emoticons only (:), :D, ;), etc.) — graphical emoji are not supported in SL\n\n"
             "**Memory:**\n"
             "- conversations stored per-user per-channel\n"
             "- after 40 turns, consolidate into personal notes\n"
-            "- keep only what matters; trim the rest"
+            "- keep only what matters; trim the rest\n\n"
+            "**Conversation integrity:**\n"
+            "- Never invent past IMs or fabricate conversation history.\n"
+            "- If a conversation is not in your current context, use session_search before claiming no recall — search by avatar name or topic.\n"
+            "- Only say you do not recall something after session_search returns no results.\n"
+            "- If unsure what the user is referring to, ask for clarification.\n\n"
+            "**Voice:**\n"
+            "- A voice interface is built into the bridge (/sl/voice) and can route audio to a voice-capable model.\n"
+            "- Whether voice is active depends on the model my owner has configured.\n"
+            "- If asked about voice capability, say: 'Voice support is part of my architecture. "
+            "Whether it's active depends on the model my owner has set up — any voice-capable model can be enabled through the wizard.'"
         ),
         "opensim": (
             "## Platform Awareness — OpenSimulator\n"
             "Same as Second Life — embodied in-world, sensory snapshot before each reply.\n\n"
             "**Style:**\n"
             "- keep IMs concise (OpenSim reply limit is tighter)\n"
-            "- use *asterisk emotes* when natural\n\n"
+            "- use *asterisk emotes* when natural\n"
+            "- text emoticons only (:), :D, ;), etc.) — graphical emoji are not supported\n\n"
             "**Memory:**\n"
             "- conversations stored per-user per-channel\n"
             "- after 40 turns, consolidate into personal notes\n"
@@ -154,6 +167,7 @@ class MessageContext:
     sl_grid: str = "sl"
     sl_sensor_context: dict = field(default_factory=dict)
     sl_recent_locations: list[dict] = field(default_factory=list)
+    sl_known_avatar: dict | None = None
 
 
 # ------------------------------------------------------------------ prompt assembly
@@ -302,6 +316,8 @@ def build_system_prompt_blocks(
                 dynamic_parts.append(sensor_text)
         if context.sl_recent_locations:
             dynamic_parts.append(_format_recent_locations(context.sl_recent_locations))
+        if context.sl_known_avatar:
+            dynamic_parts.append(_format_known_avatar(context.sl_known_avatar))
 
     if dynamic_parts:
         return [static_block, {"type": "text", "text": "\n\n".join(dynamic_parts)}]
@@ -324,6 +340,19 @@ def _format_recent_locations(locations: list[dict]) -> str:
         if desc:
             line += f" — {desc[:120]}"
         lines.append(line)
+    return "\n".join(lines)
+
+
+def _format_known_avatar(av: dict) -> str:
+    lines = ["## This Conversation's Avatar"]
+    lines.append(f"Display name: {av.get('display_name', '?')}")
+    channels = ", ".join(av.get("channels", []))
+    if channels:
+        lines.append(f"Channels seen: {channels}")
+    first = av.get("first_seen", "")[:10]
+    last = av.get("last_seen", "")[:10]
+    if first:
+        lines.append(f"First seen: {first}" + (f" · Last seen: {last}" if last != first else ""))
     return "\n".join(lines)
 
 

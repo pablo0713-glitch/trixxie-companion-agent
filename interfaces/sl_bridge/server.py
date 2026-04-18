@@ -9,8 +9,10 @@ from pydantic import BaseModel
 from config.settings import Settings
 from core.agent import AgentCore
 from core.persona import MessageContext
+from core.persona import get_agent_config
 from interfaces.sl_bridge.formatters import cap_reply
 from interfaces.sl_bridge.sensor_store import SensorStore
+from memory.avatar_store import AvatarStore
 from memory.location_store import LocationStore
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,14 @@ class SLInboundPayload(BaseModel):
     secret: str = ""   # body-based auth for clients that cannot send custom headers (e.g. Lua PostHTTP)
 
 
+class SLVoicePayload(BaseModel):
+    user_id: str
+    region: str = ""
+    audio_base64: str = ""   # base64-encoded audio (WAV/PCM) from external capture tool
+    grid: str = "sl"
+    secret: str = ""
+
+
 class SLSensorPayload(BaseModel):
     type: str           # avatars | environment | objects | clothing | chat
     region: str
@@ -43,7 +53,7 @@ class SLOutboundResponse(BaseModel):
 
 # ------------------------------------------------------------------ app factory
 
-def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStore, location_store: LocationStore | None = None) -> FastAPI:
+def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStore, location_store: LocationStore | None = None, avatar_store: AvatarStore | None = None) -> FastAPI:
     app = FastAPI(title="Trixxie SL Bridge", docs_url=None, redoc_url=None)
 
     # ---- Conversation endpoint ----
@@ -63,6 +73,11 @@ def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStor
         if location_store:
             recent_locations = await location_store.get_recent_visits(sl_user_id, limit=10)
 
+        known_avatar: dict | None = None
+        if avatar_store:
+            await avatar_store.record_encounter(sl_user_id, payload.display_name, payload.channel)
+            known_avatar = await avatar_store.get_avatar_async(sl_user_id)
+
         context = MessageContext(
             platform="sl",
             user_id=sl_user_id,
@@ -71,6 +86,7 @@ def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStor
             sl_region=payload.region,
             sl_sensor_context=sensor_ctx,
             sl_recent_locations=recent_locations,
+            sl_known_avatar=known_avatar,
         )
 
         try:
@@ -110,6 +126,29 @@ def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStor
                     logger.debug("Location recorded: %s / %s for %s", region, parcel, sl_user_id)
 
         return {"status": "ok"}
+
+    # ---- Voice endpoint (stub) ----
+
+    @app.post("/sl/voice")
+    async def sl_voice(request: Request, payload: SLVoicePayload) -> dict:
+        header_secret = request.headers.get("X-SL-Secret", "")
+        secret = header_secret or payload.secret
+        if settings.sl_bridge_secret and secret != settings.sl_bridge_secret:
+            return {"status": "unauthorized", "reply": ""}
+
+        cfg_tools = get_agent_config().get("tools", {})
+        if not cfg_tools.get("voice", False):
+            return {
+                "status": "stub",
+                "reply": (
+                    "Voice input received. Voice processing isn't active in my current "
+                    "configuration — a voice-capable model needs to be configured to use it."
+                ),
+            }
+
+        # Future: decode payload.audio_base64, send to voice-capable model, return transcript + reply
+        logger.info("Voice POST from sl_%s — voice model processing not yet implemented", payload.user_id)
+        return {"status": "stub", "reply": "Voice model not implemented."}
 
     # ---- Health ----
 

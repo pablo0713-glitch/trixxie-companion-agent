@@ -12,13 +12,13 @@
 // ================================================================
 
 // --- Config ---
-string  SERVER_URL     = "https://toe-highly-leasing-epic.trycloudflare.com";
+string  SERVER_URL     = "https://caught-cheese-doll-middle.trycloudflare.com";
 string  SECRET         = "death1";
 string  GRID           = "sl";      // "sl" for Second Life, "opensim" for OpenSimulator
 integer LISTEN_CHANNEL = 42;
 integer UI_CHANNEL     = -7654321;  // private dialog channel
 integer CHAT_BUF_SIZE  = 10;        // ambient chat lines to buffer
-string  TRIGGER_NAME   = "Trixxie"; // name that triggers a local chat response
+list    TRIGGER_NAMES  = ["Trixxie", "Trix", "Trixx"]; // names/aliases that trigger a local chat response
 
 // --- Sensor toggles ---
 integer s_avatars = TRUE;
@@ -26,6 +26,7 @@ integer s_chat    = TRUE;
 integer s_env     = TRUE;
 integer s_objects = TRUE;
 integer s_rlv     = TRUE;
+integer s_voice   = FALSE;  // enables /sl/voice endpoint on the server; stub until voice model configured
 // s_stream = TRUE  → sensors POST on independent timers (continuous)
 // s_stream = FALSE → sensors POST only when a /42 message is sent
 integer s_stream  = TRUE;
@@ -198,7 +199,7 @@ do_avatar_scan()
             if (llGetListLength(det) == 2)
             {
                 float dist = llVecDist(llList2Vector(det, 0), my_pos);
-                nearby += [dist, llList2String(det, 1)];
+                nearby += [dist, id, llList2String(det, 1)];
             }
         }
     }
@@ -206,21 +207,22 @@ do_avatar_scan()
 
     if (llGetListLength(nearby) == 0) return;
 
-    // Sort nearest-first, trim to AV_MAX, then build JSON
-    nearby = llListSort(nearby, 2, TRUE);
+    // Sort nearest-first (stride 3: [dist, key, name]), trim to AV_MAX, build JSON
+    nearby = llListSort(nearby, 3, TRUE);
 
-    integer total = llGetListLength(nearby) / 2;
+    integer total = llGetListLength(nearby) / 3;
     if (total > AV_MAX)
     {
-        nearby = llList2List(nearby, 0, AV_MAX * 2 - 1);
+        nearby = llList2List(nearby, 0, AV_MAX * 3 - 1);
         total  = AV_MAX;
     }
 
     string arr = "[";
     for (i = 0; i < total; i++)
     {
-        float  rd    = (float)llRound(llList2Float(nearby, i * 2) * 10) / 10.0;
-        string aname = llList2String(nearby, i * 2 + 1);
+        float   rd       = (float)llRound(llList2Float(nearby, i * 3) * 10) / 10.0;
+        key     aid      = llList2Key(nearby, i * 3 + 1);
+        string  aname    = llList2String(nearby, i * 3 + 2);
         if (i > 0) arr += ",";
         arr += "{\"name\":\"" + json_s(aname) + "\",\"distance\":" + (string)rd + "}";
     }
@@ -389,9 +391,10 @@ show_menu()
         + " En:" + (string)s_env
         + " Ob:" + (string)s_objects
         + " RLV:" + (string)s_rlv
+        + " Vo:" + (string)s_voice
         + " " + mode,
         ["Avatars", "Chat", "Environment", "Objects",
-         "RLV", "Streaming", "Scan Target", "Status", "Close"],
+         "RLV", "Voice", "Streaming", "Scan Target", "Status", "Close"],
         UI_CHANNEL);
 }
 
@@ -406,6 +409,7 @@ show_status()
         + "Env     : " + (string)s_env     + "\n"
         + "Objects : " + (string)s_objects + "\n"
         + "RLV     : " + (string)s_rlv     + "\n"
+        + "Voice   : " + (string)s_voice   + "\n"
         + "Mode    : " + mode + "\n"
         + "Region  : " + llGetRegionName()
     );
@@ -492,6 +496,20 @@ process_object_hits(integer num)
 }
 
 
+// Returns TRUE if any name in TRIGGER_NAMES appears in msg (case-insensitive)
+integer is_triggered(string msg)
+{
+    string lower = llToLower(msg);
+    integer i;
+    for (i = 0; i < llGetListLength(TRIGGER_NAMES); i++)
+    {
+        if (llSubStringIndex(lower, llToLower(llList2String(TRIGGER_NAMES, i))) != -1)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+
 // ================================================================
 // default state
 // ================================================================
@@ -509,6 +527,9 @@ default
         last_parcel  = llList2String(llGetParcelDetails(llGetPos(), [PARCEL_DETAILS_NAME]), 0);
         sk_sim_query = llRequestSimulatorData(last_region, DATA_SIM_RATING);
         do_env_scan();
+        do_avatar_scan();
+        do_rlv_scan();
+        do_object_scan();
         llOwnerSay("Trixxie Sensory HUD active. Touch to open controls.");
     }
 
@@ -581,11 +602,9 @@ default
                     nearby_chat = llList2List(nearby_chat, -CHAT_BUF_SIZE, -1);
             }
 
-            // Name trigger: respond via llSay if TRIGGER_NAME appears in message
-            // and no local chat reply is already in flight.
-            if (id != llGetOwner()
-                && reply_lc_http == NULL_KEY
-                && llSubStringIndex(llToLower(message), llToLower(TRIGGER_NAME)) != -1)
+            // Name trigger: respond if TRIGGER_NAME appears in message and no reply
+            // is already in flight. Owner gets a private IM; others get llSay(0).
+            if (reply_lc_http == NULL_KEY && is_triggered(message))
             {
                 reply_lc_id = id;
                 string body = "{"
@@ -621,6 +640,7 @@ default
                 show_menu();
             }
             else if (message == "RLV")         { s_rlv     = !s_rlv;     show_menu(); }
+            else if (message == "Voice")       { s_voice   = !s_voice;   show_menu(); }
             else if (message == "Streaming")   { s_stream  = !s_stream;  show_menu(); }
             else if (message == "Scan Target") { do_clothing_scan(); }
             else if (message == "Status")      { show_status(); }
@@ -766,6 +786,27 @@ default
                 string reply = llJsonGetValue(body, ["reply"]);
                 if (reply != JSON_INVALID && reply != "")
                     say_chunked(reply);
+                integer idx = 0;
+                integer done = FALSE;
+                while (idx < 5 && !done)
+                {
+                    string atype = llJsonGetValue(body, ["actions", idx, "action_type"]);
+                    if (atype == JSON_INVALID) { done = TRUE; }
+                    else
+                    {
+                        string atext = llJsonGetValue(body, ["actions", idx, "text"]);
+                        if (atext == JSON_INVALID) atext = "";
+                        if (atype == "say")
+                            say_chunked(atext);
+                        else if (atype == "emote")
+                        {
+                            if (llGetSubString(atext, 0, 0) != "*")
+                                atext = "*" + atext + "*";
+                            say_chunked(atext);
+                        }
+                        idx++;
+                    }
+                }
             }
             return;
         }
@@ -794,7 +835,9 @@ default
             if (atype == JSON_INVALID) return;
             string text = llJsonGetValue(body, ["actions", idx, "text"]);
             if (text == JSON_INVALID) text = "";
-            if (atype == "emote" || atype == "im")
+            if (atype == "say")
+                say_chunked(text);
+            else if (atype == "emote" || atype == "im")
             {
                 if (atype == "emote" && llGetSubString(text, 0, 0) != "*")
                     text = "*" + text + "*";

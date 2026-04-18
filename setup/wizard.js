@@ -121,6 +121,7 @@ const state = {
   search_api_key: '',
   notes_enabled: true,
   sl_action_enabled: true,
+  voice_enabled: false,
   additional_context: '',
 };
 
@@ -226,6 +227,7 @@ function applyConfig(config) {
   if (t.web_search !== undefined) state.web_search_enabled = t.web_search;
   if (t.notes !== undefined) state.notes_enabled = t.notes;
   if (t.sl_action !== undefined) state.sl_action_enabled = t.sl_action;
+  if (t.voice     !== undefined) state.voice_enabled     = t.voice;
 }
 
 // ============================================================
@@ -570,6 +572,20 @@ function buildStep5() {
           <span class="slider"></span>
         </label>
       </div>
+    </div>
+
+    <div class="tool-card ${state.voice_enabled ? 'enabled' : ''}">
+      <div class="card-header">
+        <div>
+          <div class="card-title">Voice (SL)</div>
+          <div class="card-desc">Enable the /sl/voice endpoint for audio input. Requires a voice-capable model. Also toggle <code>s_voice</code> in the HUD script to report who is in voice chat.</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="f-voice-on" ${state.voice_enabled ? 'checked' : ''}
+            onchange="this.closest('.tool-card').classList.toggle('enabled', this.checked)">
+          <span class="slider"></span>
+        </label>
+      </div>
     </div>` : ''}`;
 }
 
@@ -580,6 +596,8 @@ function collectStep5() {
   state.notes_enabled      = chk('f-notes-on');
   const slEl               = document.getElementById('f-slaction-on');
   if (slEl) state.sl_action_enabled = slEl.checked;
+  const voiceEl            = document.getElementById('f-voice-on');
+  if (voiceEl) state.voice_enabled  = voiceEl.checked;
 }
 
 // ============================================================
@@ -652,6 +670,7 @@ function buildStep7() {
   if (state.web_search_enabled) tools.push('<span class="badge">Web Search</span>');
   if (state.notes_enabled)      tools.push('<span class="badge">Notes</span>');
   if (state.sl_action_enabled && state.sl_enabled) tools.push('<span class="badge">SL Actions</span>');
+  if (state.voice_enabled     && state.sl_enabled) tools.push('<span class="badge">Voice</span>');
 
   return `
     <h2 class="step-heading">Ready to Launch</h2>
@@ -744,6 +763,7 @@ async function save() {
         web_search: state.web_search_enabled,
         notes:      state.notes_enabled,
         sl_action:  state.sl_action_enabled,
+        voice:      state.voice_enabled,
       },
     },
   };

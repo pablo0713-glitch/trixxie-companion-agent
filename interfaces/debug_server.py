@@ -134,6 +134,7 @@ def create_debug_router(sensor_store: "SensorStore", agent_core: "AgentCore") ->
                     "ts_fmt": datetime.fromtimestamp(exchange["ts"], tz=timezone.utc)
                               .strftime("%Y-%m-%d %H:%M:%S UTC") if exchange else "",
                     "platform": exchange.get("platform"),
+                    "display_name": exchange.get("display_name", ""),
                     "user_message": exchange.get("user_message"),
                     "reply_text": exchange.get("reply_text"),
                     "assistant_turns": exchange.get("assistant_turns"),
@@ -506,11 +507,14 @@ async function refreshPrompts() {
     const ex = data[uid].last_exchange;
     const platform = ex ? ex.platform : '';
     const badgeCls = platform === 'discord' ? 'discord' : 'sl';
-    const label = uid.replace(/^(discord|sl)_/, '');
+    const shortUid = uid.replace(/^(discord|sl)_/, '');
+    const displayName = ex && ex.display_name ? ex.display_name : '';
+    const label = displayName || shortUid;
     return '<div class="user-item' + (uid === selectedUser ? ' active' : '') +
            '" data-uid="' + esc(uid) + '" onclick="selectUser(this)">' +
            '<span class="badge ' + badgeCls + '">' + platform + '</span>' +
            esc(label) +
+           (displayName ? '<span class="uid">' + esc(shortUid) + '</span>' : '') +
            (ex ? '<span class="uid">' + esc(ex.ts_fmt) + '</span>' : '') +
            '</div>';
   }).join('');
@@ -648,20 +652,31 @@ function renderBlocksView(uid) {
 }
 
 function parseMemorySections(text) {
-  // Splits §-delimited MEMORY/USER sections from the formatted memory_files string
+  // Line-by-line parser — avoids multiline $ matching every line-end in regex
   const sections = [];
-  const sectionRe = /^((?:MEMORY|USER)[^\\n]+)\\n([\\s\\S]*?)(?=^(?:MEMORY|USER)[^\\n]+\\n|$)/gm;
-  let m;
-  while ((m = sectionRe.exec(text + '\\n')) !== null) {
-    const headerLine = m[1].trim();
-    // Split header into label + usage bracket
-    const bracketIdx = headerLine.indexOf('[');
-    const header = bracketIdx > -1 ? headerLine.slice(0, bracketIdx).trim() : headerLine;
-    const usage = bracketIdx > -1 ? headerLine.slice(bracketIdx) : '';
-    const body = m[2] || '';
+  const lines = text.split('\\n');
+  let current = null;
+  let bodyLines = [];
+  const flush = () => {
+    if (!current) return;
+    const body = bodyLines.join('\\n');
     const entries = body.split('§').map(e => e.trim()).filter(Boolean);
-    sections.push({ header, usage, entries });
+    sections.push({ ...current, entries });
+  };
+  for (const line of lines) {
+    if (/^(?:MEMORY|USER)\s/.test(line)) {
+      flush();
+      const bracketIdx = line.indexOf('[');
+      current = {
+        header: bracketIdx > -1 ? line.slice(0, bracketIdx).trim() : line.trim(),
+        usage:  bracketIdx > -1 ? line.slice(bracketIdx) : '',
+      };
+      bodyLines = [];
+    } else if (current) {
+      bodyLines.push(line);
+    }
   }
+  flush();
   return sections;
 }
 

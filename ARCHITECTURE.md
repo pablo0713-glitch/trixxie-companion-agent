@@ -30,9 +30,7 @@ Trixxie is a stateful AI agent built around a single shared core (`AgentCore`) t
                    └─────────────────────┘  └─────────────────────┘
 ```
 
-Both interfaces share the same `AgentCore`, `FileMemoryStore`, and `LocationStore`. A `PersonMap` links platform-specific user IDs to a canonical person identity so that conversations on either platform inform the same memory context.
-
-For LSL HUD internals — sensor data formats, timer architecture, scan modes, HTTP key management — see [lsl/ARCHITECTURE.md](lsl/ARCHITECTURE.md).
+Both interfaces share the same `AgentCore`, `FileMemoryStore`, `LocationStore`, and `AvatarStore`. A `PersonMap` links platform-specific user IDs to a canonical person identity so that conversations on either platform inform the same memory context.
 
 ---
 
@@ -108,7 +106,11 @@ core/
                                  shell injection, and invisible Unicode before writing.
                                  Consolidator path is also scanned.
     session_search.py            Wraps SessionIndex.search() for in-conversation recall.
-                                 Returns platform + date + role + FTS snippet list.
+                                 Returns platform + date + display_name + FTS snippet list.
+                                 Not user-scoped — all conversations are searchable.
+    session_query.py             Structured SQL query tool (speakers / turns modes).
+                                 Supports date_from/date_to, platform, include_names,
+                                 exclude_names, and limit filters.
 
 memory/
   base.py           AbstractMemoryStore   Interface contract. Async methods:
@@ -140,6 +142,12 @@ memory/
   location_store.py LocationStore         Persists SL region/parcel visit history.
                                           Per-user asyncio.Lock. Deduplicates by
                                           region+parcel key.
+  avatar_store.py   AvatarStore           Global registry of SL avatars Trixxie has
+                                          spoken with. Single asyncio.Lock (file-level).
+                                          record_encounter(user_id, display_name, channel)
+                                          upserts on every /sl/message. get_avatar_async()
+                                          returns the entry for Block 1 injection.
+                                          File: data/memory/known_avatars.json.
 
 data/
   identity/
@@ -153,6 +161,9 @@ data/
     stm.json                              Short-term memory: rolling 10 exchange summaries
                                           (1–2 sentences each), used as cross-platform bridge.
     locations.json                        SL visit history (LocationStore).
+  memory/known_avatars.json               Global AvatarStore registry. Maps sl_{uuid} →
+                                          {display_name, first_seen, last_seen, channels[]}.
+                                          Not per-user — one file covering all SL avatars.
   memory/{safe_person_id}/
     MEMORY.md                             Agent-curated notes about context and world
                                           (~2,000 chars max; §-delimited entries).
@@ -167,9 +178,11 @@ interfaces/
     server.py                             FastAPI HTTP bridge. Two endpoints:
                                           POST /sl/sensor — stores sensor data,
                                             records location visits on environment posts.
-                                          POST /sl/message — loads location history,
+                                          POST /sl/message — records avatar encounter
+                                            (AvatarStore), loads location history,
                                             calls SensorStore.get_changes() for this user,
-                                            builds MessageContext, calls AgentCore.
+                                            builds MessageContext (including sl_known_avatar),
+                                            calls AgentCore.
                                           Always returns HTTP 200 — errors go in the
                                           JSON body to protect LSL's error throttle.
     sensor_store.py   SensorStore         In-memory snapshot of latest sensor data per
@@ -183,6 +196,9 @@ interfaces/
                                           update) surfaced as labels in the system prompt.
     formatters.py                         Grid-aware reply cap: 4000 chars (SL) or 1800
                                           chars (OpenSim). Normalizes Unicode to ASCII.
+                                          Strips non-BMP characters (U+10000+, i.e. emoji)
+                                          — LSL cannot handle 4-byte UTF-8 sequences and
+                                          produces garbled bytes (ð) without this filter.
 
   discord_bot/
     bot.py          TrixxieBot            discord.py Client. Responds to @mentions
@@ -201,11 +217,13 @@ lsl/
                                           Listens on channel 42 for /42 conversation —
                                           POSTs to /sl/message, delivers reply via
                                           llInstantMessage (send_chunked).
-                                          Also listens on channel 0 for name-trigger
-                                          (TRIGGER_NAME substring match) — POSTs to
-                                          /sl/message, delivers reply via llSay(0, ...)
-                                          (say_chunked) so the conversation remains in
-                                          public local chat.
+                                          Also listens on channel 0 for name-trigger:
+                                          any name in TRIGGER_NAMES list (default:
+                                          ["Trixxie", "Trix", "Trixx"]) triggers is_triggered().
+                                          POSTs to /sl/message (channel 0), delivers
+                                          reply via llSay(0, say_chunked) — visible to
+                                          all nearby as public local chat. Applies to all
+                                          avatars including the owner.
 
 lua/
   trixxie_companion.lua                   Cool VL Viewer automation script.
@@ -401,7 +419,7 @@ session_search(query="Botanical sim recommendations", limit=5)
 → [DISCORD | 2026-04-10 | assistant] "The [Botanical] sim has great atmosphere for..."
 ```
 
-Results are scoped to the current `user_id` — cross-user data never surfaces in search results.
+Results are not user-scoped — all of Trixxie's conversation history is searchable, enabling cross-user recall (e.g. "did someone named Flendo ever mention the Botanical sim?"). The `session_query` tool provides structured SQL-style access (speakers mode / turns mode) with date, platform, and name filters.
 
 ---
 
@@ -455,6 +473,7 @@ Message received
        │                                                rlv: up to 30s old
        │                                                others: only if updated)
        ├── LocationStore.get_recent_visits()           (current state)
+       ├── AvatarStore.record_encounter() + get_avatar_async() (upsert then read)
        │
        └── build_system_prompt_blocks() → [static block (cached), dynamic block]
                                                         → Claude API call
@@ -485,6 +504,7 @@ The platform awareness block tells the agent what it can perceive, what it canno
 | 5 | STM bridge | `_load_stm_bridge(linked_ids)` — rolling exchange summaries | If linked platform IDs exist |
 | 6 | Sensor context | `SensorStore.get_changes()` — objects grouped by (name,owner) | SL only, if non-empty |
 | 7 | Places visited | `LocationStore.get_recent_visits()` | SL only, if non-empty |
+| 8 | Known avatar | `AvatarStore.get_avatar_async()` — display name, channels, first/last seen | SL only, if avatar has prior record |
 
 ---
 
@@ -555,6 +575,252 @@ Sensor data travels a separate path in both cases — the HUD POSTs to `/sl/sens
 
 ---
 
+## LSL HUD — Detailed Reference
+
+The HUD (`lsl/companion_bridge.lsl`) sits between Second Life's runtime and the companion bridge server. It collects data from five sources (environment, avatars, local chat, nearby objects, avatar attachments) and streams each as a JSON POST to `/sl/sensor`. It handles two conversation flows: channel 42 (`/42 message`) and local chat name-trigger (channel 0).
+
+```
+┌─────────────────────────────────────────────┐
+│              Second Life Region              │
+│                                             │
+│  Local chat ──┬─ name trigger ────────────┐ │
+│  Avatars ─────┤                           │ │
+│  Environment ─┼──► sensor pipeline ───────┤──► /sl/sensor
+│  Objects ─────┤                           │ │
+│  Attachments ─┘                           ├──► /sl/message
+│                    /42 chat ──────────────┘ │
+└─────────────────────────────────────────────┘
+```
+
+### API Endpoints
+
+#### `POST /sl/sensor`
+
+Fire-and-forget sensor data. All sensor types share this endpoint, distinguished by the `type` field.
+
+```json
+{
+  "type": "avatars | environment | chat | objects | clothing",
+  "region": "Region Name",
+  "user_id": "<owner UUID>",
+  "data": { ... }
+}
+```
+
+`user_id` is `llGetOwner()`. The server uses it to index location records when `type` is `"environment"`. The HUD discards the response (HTTP key cleared in `http_response`).
+
+#### `POST /sl/message`
+
+Sent from two paths: channel 42 (`/42 message`) and channel 0 name-trigger.
+
+```json
+{
+  "user_id": "<UUID>",
+  "display_name": "Resident Name",
+  "message": "the message text",
+  "region": "Region Name",
+  "channel": 0,
+  "grid": "sl"
+}
+```
+
+`channel` reflects the source: `0` for name-trigger, `42` for channel 42. The server uses this to namespace conversation memory (`sl_0` vs `sl_42`).
+
+**Response format:**
+```json
+{
+  "reply": "optional direct reply string",
+  "actions": [
+    { "action_type": "say | im | emote | anim_trigger | mute_avatar | unmute_avatar", "text": "..." },
+    ...
+  ]
+}
+```
+
+Up to 5 actions are processed per reply path:
+
+| `action_type` | Channel 42 path | Channel 0 (name-trigger) path |
+|---|---|---|
+| `say` | `say_chunked(text)` — public `llSay(0)` | `say_chunked(text)` — public `llSay(0)` |
+| `im` | `llInstantMessage(sender, text)` | *(not processed)* |
+| `emote` | `llInstantMessage(sender, "*text*")` | `say_chunked("*text*")` |
+| `mute_avatar` | `AddMute(target_key, 1)` | `AddMute(target_key, 1)` |
+| `unmute_avatar` | `RemoveMute(target_key, 1)` | `RemoveMute(target_key, 1)` |
+
+The primary `reply` text follows the same rule: channel 42 → `llInstantMessage`; channel 0 → `llSay(0)`.
+
+### Sensor Data Formats
+
+#### `avatars`
+```json
+[
+  { "name": "Display Name", "distance": 12.3 },
+  ...
+]
+```
+Sourced from `llGetAgentList(AGENT_LIST_REGION, [])`. Sorted nearest-first, capped at **25 entries** (Stack-Heap Collision protection for crowded sims). HUD owner excluded. Distances rounded to 1 decimal.
+
+#### `environment`
+```json
+{
+  "region": "Region Name",
+  "parcel": "Parcel Name",
+  "parcel_desc": "Parcel description text",
+  "rating": "General",
+  "time_of_day": "0.75",
+  "sun_altitude": "0.42",
+  "avatar_count": 14
+}
+```
+`rating` is fetched asynchronously via `llRequestSimulatorData(region, DATA_SIM_RATING)` on startup and region change — normalised from `"PG"/"MATURE"/"ADULT"` to `"General"/"Moderate"/"Adult"`. Empty on the first POST if the dataserver hasn't responded yet.
+
+`parcel_desc` carriage returns (char 13) are stripped before JSON encoding — SL text fields use `\r\n` and a raw CR causes a server 422.
+
+#### `chat`
+```json
+["Speaker: line of chat", "Speaker: line of chat"]
+```
+Pre-escaped strings. Sent by `do_chat_flush()` every 90 s and immediately before each `/42` POST. Server accumulates up to 30 lines rolling.
+
+#### `objects`
+```json
+[
+  {
+    "name": "Object Name",
+    "distance": 5.1,
+    "scripted": true,
+    "description": "Object description text",
+    "owner": "Resident Name"
+  }
+]
+```
+Capped at 20 objects. Avatars excluded. `scripted` is `true` for physical/scripted objects. `description` truncated at 200 chars. `owner` resolved via `llKey2Name`.
+
+#### `rlv`
+```json
+{
+  "sitting": true,
+  "on_object": true,
+  "sitting_on": "Pose Stand",
+  "autopilot": false,
+  "flying": false,
+  "teleported": false,
+  "position": [128.5, 64.2, 23.1]
+}
+```
+Sent every 30 s and on parcel crossings. Uses `llGetAgentInfo(llGetOwner())` flags: `AGENT_SITTING`, `AGENT_ON_OBJECT`, `AGENT_AUTOPILOT`, `AGENT_FLYING`. `teleported` is `true` for one tick when position jumped >10m. When `on_object` is true, a 2m `llSensor` sweep (scan_mode 4) resolves `sitting_on` before posting.
+
+#### `clothing`
+```json
+{
+  "target": "Avatar Name",
+  "items": [
+    { "item": "Attachment Name", "creator": "Creator Name" }
+  ]
+}
+```
+Only worn attachments (non-zero attachment point) owned by the scanned avatar are included.
+
+### Timer Architecture
+
+Single 30-second tick (`TICK_SECS = 30.0`). All scanning is driven by tick count or change-detection.
+
+| Trigger | Interval | Sensors fired |
+|---|---|---|
+| Startup (`state_entry`) | once | env + sim rating + avatars + rlv + objects |
+| Region change | immediate | env + objects + sim rating request |
+| Parcel crossing | immediate | env + objects + rlv |
+| Every 1 tick | 30 s | RLV / avatar state |
+| Every 3 ticks | 90 s | chat flush |
+| Every 5 ticks | 150 s | avatars |
+| Every 10 ticks | 300 s | objects |
+| Every 20 ticks | 600 s | environment (time-of-day drift) |
+| On /42 received | immediate | chat flush + rlv (per-message mode only: + avatars + env) |
+
+**Change detection** runs on every tick before interval checks:
+1. **Region change** — `llGetRegionName()` vs `last_region`. Fires env + objects, resets `tick = 0`.
+2. **Parcel crossing** — if region unchanged, reads parcel name and compares to `last_parcel`. Fires env + objects + rlv. `do_env_scan()` always updates `last_parcel`.
+
+**Server-side deduplication:** `SensorStore.get_changes()` tracks the last delivery timestamp per user per sensor type. Unchanged snapshots are suppressed on consecutive fast messages.
+
+### Scan Mode State Machine
+
+The clothing and object scanners use `scan_mode` to coordinate async `llSensor` results:
+
+```
+scan_mode = 0  Idle
+
+scan_mode = 1  AGENT sweep in progress (clothing — find nearest avatar)
+               → stores clo_target / clo_name, triggers scan_mode = 2
+
+scan_mode = 2  Attachment sweep in progress (clothing — find worn items)
+               → process_clothing_hits(), posts clothing payload, scan_mode = 0
+
+scan_mode = 3  Object proximity sweep in progress
+               → process_object_hits(), posts objects payload, scan_mode = 0
+
+scan_mode = 4  RLV sitting-object resolution (2m sweep to find sit target name)
+               → post_rlv_data(obj_name), scan_mode = 0
+```
+
+`no_sensor()` resets `scan_mode` and clears `clo_target`/`clo_name`.
+
+### HTTP Key Management
+
+| Key | Purpose |
+|---|---|
+| `sk_av` | Avatar scan post (fire-and-forget) |
+| `sk_env` | Environment scan post |
+| `sk_obj` | Object proximity post |
+| `sk_clo` | Clothing scan post |
+| `sk_chat` | Chat flush post |
+| `sk_rlv` | RLV / avatar state post |
+| `reply_http` | Active channel-42 conversation request |
+| `reply_sender` | UUID of channel-42 sender — held until `http_response` fires |
+| `reply_lc_http` | Active channel-0 name-trigger conversation request |
+| `reply_lc_id` | UUID of local chat speaker — held until `http_response` fires |
+| `sk_sim_query` | `llRequestSimulatorData` key (dataserver, not HTTP) |
+
+`reply_http` and `reply_lc_http` are independent in-flight guards — a channel-42 reply in flight does not block a local chat trigger. While `reply_http` is non-null, new `/42` messages are rejected with `*still thinking...*`.
+
+### Chat Buffer
+
+Channel 0 messages are appended to `nearby_chat` (rolling `CHAT_BUF_SIZE = 10` lines). Every `CHAT_TICKS` ticks (90 s), `do_chat_flush()` POSTs the buffer to `/sl/sensor` as `type: "chat"` and clears the list. It also fires immediately when a `/42` message is received, capturing any chat since the last flush.
+
+The `s_chat` toggle controls buffering entirely — when `FALSE`, `nearby_chat` stays empty.
+
+### Function Reference
+
+| Function | Description |
+|---|---|
+| `json_s(string)` | Escapes `\`, `"`, `\n`, `\t` for JSON string embedding |
+| `sensor_post(type, data_json)` | Wraps data in the `/sl/sensor` envelope and POSTs it |
+| `do_avatar_scan()` | Collects nearest 25 agents via `llGetAgentList`, sorts by distance, posts `avatars` |
+| `do_env_scan()` | Reads parcel/region/time data, posts `environment`; updates `last_parcel` |
+| `do_object_scan()` | Triggers `llSensor` sweep for scan_mode 3 |
+| `do_rlv_scan()` | Reads `llGetAgentInfo` flags + position delta; triggers 2m sensor sweep (scan_mode 4) when sitting |
+| `post_rlv_data(sitting_on)` | Builds and posts `rlv` payload |
+| `do_clothing_scan()` | Triggers `llSensor` AGENT sweep for scan_mode 1 |
+| `process_clothing_hits(num)` | scan_mode 2 handler — filters attachments, posts `clothing` |
+| `process_object_hits(num)` | scan_mode 3 handler — collects objects, posts `objects` |
+| `send_chunked(target, text)` | Splits reply at sentence boundaries, delivers via `llInstantMessage` (≤1000 chars each) |
+| `say_chunked(text)` | Same split logic, delivers via `llSay(0)` — public local chat |
+| `is_triggered(msg)` | Returns TRUE if any name in `TRIGGER_NAMES` appears in `msg` (case-insensitive) |
+| `show_menu()` | Displays the HUD control dialog |
+| `show_status()` | Prints sensor state to owner chat |
+
+### OpenSimulator Compatibility
+
+The HUD works on OpenSimulator (0.9.3.0+, YEngine) with one configuration change:
+
+```lsl
+string  GRID = "opensim";   // caps replies at 1800 chars (default OpenSim HTTP body limit)
+```
+
+All LSL functions used (`llHTTPRequest`, `llGetAgentList`, `llGetObjectDetails`, `llGetParcelDetails`, `llReplaceSubString`, `llJsonGetValue`, `llInstantMessage`, `llDialog`, `llSensor`, `llGetEnv`, `HTTP_CUSTOM_HEADER`) are supported in current OpenSim. To raise the body limit and allow longer replies, set `HttpBodyMaxLenMAX = 16384` in `OpenSim.ini [Network]`.
+
+---
+
 ## Platform Differences
 
 | Concern | Discord | SL — LSL HUD | SL — Lua script |
@@ -590,7 +856,7 @@ asyncio event loop
         └── GET  /setup/* → wizard API
 ```
 
-All three services share the same `AgentCore`, `FileMemoryStore`, and `LocationStore` instances. Concurrent writes to the same memory file are serialised by per-(user, channel) `asyncio.Lock` in `FileMemoryStore`. `LocationStore` uses a per-user `asyncio.Lock` for the same reason.
+All three services share the same `AgentCore`, `FileMemoryStore`, `LocationStore`, and `AvatarStore` instances. Concurrent writes to the same memory file are serialised by per-(user, channel) `asyncio.Lock` in `FileMemoryStore`. `LocationStore` uses a per-user `asyncio.Lock`; `AvatarStore` uses a single file-level lock (one global file for all avatars).
 
 ---
 

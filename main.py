@@ -20,6 +20,7 @@ from interfaces.sl_bridge.sensor_store import SensorStore
 from interfaces.sl_bridge.server import create_sl_app
 from memory.consolidator import MemoryConsolidator
 from memory.file_store import FileMemoryStore
+from memory.avatar_store import AvatarStore
 from memory.location_store import LocationStore
 from memory.person_map import PersonMap
 from memory.session_index import SessionIndex
@@ -44,6 +45,13 @@ async def main() -> None:
     memory = FileMemoryStore(settings.memory_dir, settings.memory_max_history, session_index)
     sensor_store = SensorStore()
     location_store = LocationStore(settings.memory_dir)
+    avatar_store = AvatarStore(settings.memory_dir)
+
+    # Backfill display names into any existing session rows that predate this field.
+    known_avatars = await avatar_store.get_all()
+    if known_avatars:
+        avatar_map = {uid: entry["display_name"] for uid, entry in known_avatars.items() if entry.get("display_name")}
+        await session_index.backfill_display_names(avatar_map)
     tool_registry = ToolRegistry(settings, session_index)
     rate_limiter = RateLimiter(settings.rate_limit_capacity, settings.rate_limit_refill_rate)
     adapter = create_adapter(settings)
@@ -113,7 +121,7 @@ async def main() -> None:
         logger.warning("DISCORD_TOKEN not set — Discord bot will not start.")
 
     # ---- Second Life HTTP bridge (always runs) ----
-    sl_app = create_sl_app(agent, settings, sensor_store, location_store)
+    sl_app = create_sl_app(agent, settings, sensor_store, location_store, avatar_store)
 
     # ---- Debug page ----
     install_log_handler(asyncio.get_running_loop())

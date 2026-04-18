@@ -37,33 +37,38 @@ WEB_SEARCH_SCHEMA = {
 SL_ACTION_SCHEMA = {
     "name": "sl_action",
     "description": (
-        "Send a private command to your Second Life presence. "
+        "Send a Second Life action from your avatar. "
         "Only available in Second Life — do not call this on Discord. "
         "Actions are queued and executed after your reply is sent. "
-        "All output is private IM to the current user — nothing goes to public chat."
+        "Note: your text reply is already delivered automatically — "
+        "as public local chat for channel 0 messages, or private IM for /42 messages. "
+        "Use sl_action for additional actions beyond the main reply."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "action_type": {
                 "type": "string",
-                "enum": ["im", "emote", "anim_trigger"],
+                "enum": ["say", "im", "emote", "anim_trigger", "mute_avatar", "unmute_avatar"],
                 "description": (
-                    "'im' = send a private instant message. "
-                    "'emote' = send *text* as a private IM (seen only by the target avatar). "
-                    "'anim_trigger' = play a named animation on your avatar."
+                    "'say' = speak in public local chat (channel 0), visible to everyone nearby. "
+                    "'im' = send a private instant message to the target avatar. "
+                    "'emote' = send *action text* as a private IM to the target avatar. "
+                    "'anim_trigger' = play a named animation on your avatar. "
+                    "'mute_avatar' = mute/block an avatar (text, voice, particles, sounds); requires target_key UUID. "
+                    "'unmute_avatar' = remove a mute/block from an avatar; requires target_key UUID."
                 ),
             },
             "text": {
                 "type": "string",
-                "description": "The text to send, or animation name for anim_trigger. Max 1023 chars.",
+                "description": "The text to send, or animation name for anim_trigger. Max 1023 chars. Optional for mute_avatar/unmute_avatar (used as display name in feedback).",
             },
             "target_key": {
                 "type": "string",
-                "description": "Optional avatar UUID. Defaults to the current user.",
+                "description": "Avatar UUID. Required for mute_avatar/unmute_avatar. Defaults to the current user for other types.",
             },
         },
-        "required": ["action_type", "text"],
+        "required": ["action_type"],
     },
 }
 
@@ -105,12 +110,66 @@ NOTE_LIST_SCHEMA = {
     "input_schema": {"type": "object", "properties": {}, "required": []},
 }
 
+SESSION_QUERY_SCHEMA = {
+    "name": "session_query",
+    "description": (
+        "Query your conversation history with structured filters. "
+        "Use 'speakers' mode to answer questions like 'who did you talk to on April 18th?' or "
+        "'list everyone you've spoken with except StonedGrits'. "
+        "Use 'turns' mode to retrieve recent messages from a specific person or date. "
+        "All filters are optional and combinable."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": ["speakers", "turns"],
+                "description": (
+                    "'speakers' returns one row per unique person with turn count and date range. "
+                    "'turns' returns individual messages with content snippets."
+                ),
+            },
+            "date_from": {
+                "type": "string",
+                "description": "Start date filter, YYYY-MM-DD (inclusive).",
+            },
+            "date_to": {
+                "type": "string",
+                "description": "End date filter, YYYY-MM-DD (inclusive, covers full day).",
+            },
+            "platform": {
+                "type": "string",
+                "enum": ["sl", "discord"],
+                "description": "Filter to a single platform.",
+            },
+            "include_names": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Only return these display names.",
+            },
+            "exclude_names": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Exclude these display names from results.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max results to return. Default 20, max 50.",
+                "default": 20,
+            },
+        },
+        "required": ["mode"],
+    },
+}
+
 SESSION_SEARCH_SCHEMA = {
     "name": "session_search",
     "description": (
-        "Search your past conversation history for a specific topic, person, place, or event. "
-        "Use this when you want to recall something from a previous session that isn't in your "
-        "current context. Returns timestamped snippets with platform and date context."
+        "Search your full conversation history across all users and platforms. "
+        "ALWAYS call this before saying you don't recall a person, conversation, or event — "
+        "search by avatar display name, topic, or keywords. "
+        "Returns timestamped snippets with the speaker's name, platform, and date."
     ),
     "input_schema": {
         "type": "object",
@@ -185,6 +244,7 @@ class ToolRegistry:
             tools.append(SL_ACTION_SCHEMA)
         tools.append(MEMORY_SCHEMA)
         if self._session_index is not None:
+            tools.append(SESSION_QUERY_SCHEMA)
             tools.append(SESSION_SEARCH_SCHEMA)
         return tools
 
@@ -197,6 +257,7 @@ class ToolRegistry:
     ) -> str:
         from core.tool_handlers import notes, sl_action, web_search
         from core.tool_handlers.memory import handle_memory
+        from core.tool_handlers.session_query import handle_session_query
         from core.tool_handlers.session_search import handle_session_search
         if name == "web_search":
             return await web_search.handle_web_search(
@@ -215,6 +276,10 @@ class ToolRegistry:
             return await notes.handle_note_list(tool_input, context, self._settings.notes_dir)
         elif name == "memory":
             return await handle_memory(tool_input, context, self._settings.memory_dir)
+        elif name == "session_query":
+            if self._session_index is None:
+                return "Session query is not available."
+            return await handle_session_query(tool_input, context, self._session_index)
         elif name == "session_search":
             if self._session_index is None:
                 return "Session search is not available."

@@ -11,8 +11,8 @@
 -- ================================================================
 
 -- --- Config ---
-local SERVER_URL    = "https://your-tunnel.trycloudflare.com"
-local SECRET        = ""
+local SERVER_URL    = "https://caught-cheese-doll-middle.trycloudflare.com"
+local SECRET        = "death1"
 local GRID          = "sl"       -- "sl" or "opensim"
 local IM_CHUNK_SIZE = 1000       -- max chars per SendIM call
 
@@ -151,13 +151,23 @@ function OnHTTPReply(handle, success, reply)
         send_chunked(ctx.session_id, reply_text)
     end
 
-    -- Deliver any action lines (im / emote).
+    -- Deliver any action lines (im / emote / mute / unmute).
     local actions = data["actions"]
     if actions then
         for _, action in ipairs(actions) do
             local atype = action["action_type"] or "im"
             local atext = action["text"] or ""
-            if atext ~= "" then
+            if atype == "mute_avatar" then
+                local target_key = action["target_key"] or ""
+                if target_key ~= "" then
+                    AddMute(target_key, 1)
+                end
+            elseif atype == "unmute_avatar" then
+                local target_key = action["target_key"] or ""
+                if target_key ~= "" then
+                    RemoveMute(target_key, 1)
+                end
+            elseif atext ~= "" then
                 if atype == "emote" then
                     -- Wrap in asterisks if not already.
                     if string.sub(atext, 1, 1) ~= "*" then

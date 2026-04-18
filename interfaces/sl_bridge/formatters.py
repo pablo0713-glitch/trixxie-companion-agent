@@ -39,6 +39,9 @@ def cap_reply(text: str, grid: str = "sl") -> str:
     are capped at 1800 chars to leave room for the JSON envelope.
     SL chunking (send_chunked in LSL) handles splitting for longer SL replies."""
     text = text.translate(_UNICODE_MAP)
+    # LSL cannot handle non-BMP characters (emoji, U+10000+); strip them to avoid
+    # garbled bytes like ð appearing in local chat output.
+    text = "".join(c for c in text if ord(c) <= 0xFFFF)
     cap = OPENSIM_REPLY_CAP if grid == "opensim" else REPLY_HARD_CAP
     if len(text) > cap:
         text = text[:cap]

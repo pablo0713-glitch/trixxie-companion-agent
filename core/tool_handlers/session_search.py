@@ -20,8 +20,7 @@ async def handle_session_search(
     if not query:
         return "query is required."
 
-    user_id = context.user_id
-    rows = await session_index.search(user_id, query, limit)
+    rows = await session_index.search(query, limit)
 
     if not rows:
         return "No matching sessions found."
@@ -31,7 +30,9 @@ async def handle_session_search(
         platform = r.get("platform", "?").upper()
         ts = r.get("timestamp", "")[:10]
         role = r.get("role", "?")
+        name = r.get("display_name", "")
         snippet = r.get("snippet", "")
-        lines.append(f"[{platform} | {ts} | {role}] {snippet}")
+        who = f"{name} · " if name and role == "user" else ""
+        lines.append(f"[{platform} | {ts} | {who}{role}] {snippet}")
 
     return "\n".join(lines)

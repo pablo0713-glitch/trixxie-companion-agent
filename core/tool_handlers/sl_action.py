@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from core.persona import MessageContext
 
-VALID_ACTION_TYPES = {"im", "emote", "anim_trigger"}
+VALID_ACTION_TYPES = {"say", "im", "emote", "anim_trigger", "mute_avatar", "unmute_avatar"}
 
 
 async def handle_sl_action(
@@ -21,8 +21,20 @@ async def handle_sl_action(
     if action_type not in VALID_ACTION_TYPES:
         return f"Unknown action type '{action_type}'. Valid types: {', '.join(sorted(VALID_ACTION_TYPES))}"
 
-    if not text:
+    is_mute_type = action_type in ("mute_avatar", "unmute_avatar")
+
+    if not text and not is_mute_type:
         return "No text provided for action."
+
+    if is_mute_type:
+        if not target_key:
+            return f"{action_type} requires target_key (avatar UUID)."
+        if target_key.startswith("sl_"):
+            target_key = target_key[3:]
+        label = text or target_key
+        action_queue.append({"action_type": action_type, "target_key": target_key})
+        verb = "Muted" if action_type == "mute_avatar" else "Unmuted"
+        return f"{verb} {label}"
 
     # Trim to SL limits
     if len(text) > 1023:

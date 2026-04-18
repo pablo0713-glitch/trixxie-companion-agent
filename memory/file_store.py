@@ -63,6 +63,7 @@ class FileMemoryStore(AbstractMemoryStore):
         platform: str,
         role: str,
         content: str | list[Any],
+        display_name: str = "",
     ) -> None:
         async with self._lock(user_id, channel_id):
             path = self._conv_path(user_id, channel_id)
@@ -87,7 +88,7 @@ class FileMemoryStore(AbstractMemoryStore):
             if text:
                 asyncio.create_task(
                     self._session_index.index_turn(
-                        user_id, channel_id, platform, role, text, _now()
+                        user_id, channel_id, platform, role, text, _now(), display_name
                     )
                 )
 
