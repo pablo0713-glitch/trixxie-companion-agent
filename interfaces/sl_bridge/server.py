@@ -27,8 +27,9 @@ class SLInboundPayload(BaseModel):
     region: str
     channel: int = 0
     timestamp: int = 0
-    grid: str = "sl"   # "sl" or "opensim" — controls reply size cap
-    secret: str = ""   # body-based auth for clients that cannot send custom headers (e.g. Lua PostHTTP)
+    grid: str = "sl"    # "sl" or "opensim" — controls reply size cap
+    client: str = "lsl" # "lsl" (HUD /42) or "lua" (Cool VL Viewer automation script)
+    secret: str = ""    # body-based auth for clients that cannot send custom headers (e.g. Lua PostHTTP)
 
 
 class SLVoicePayload(BaseModel):
@@ -68,6 +69,7 @@ def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStor
             return SLOutboundResponse(reply="Authentication failed.", actions=[])
 
         sl_user_id = f"sl_{payload.user_id}"
+        logger.debug("SL message: user=%s client=%s channel=%s", payload.user_id, payload.client, payload.channel)
         sensor_ctx = sensor_store.get_changes(payload.region, sl_user_id)
         recent_locations: list[dict] = []
         if location_store:
@@ -77,6 +79,8 @@ def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStor
         if avatar_store:
             await avatar_store.record_encounter(sl_user_id, payload.display_name, payload.channel)
             known_avatar = await avatar_store.get_avatar_async(sl_user_id)
+            if known_avatar is not None:
+                known_avatar = {**known_avatar, "sl_uuid": payload.user_id}
 
         context = MessageContext(
             platform="sl",
@@ -84,6 +88,7 @@ def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStor
             channel_id=f"sl_{payload.channel}",
             display_name=payload.display_name,
             sl_region=payload.region,
+            sl_client=payload.client,
             sl_sensor_context=sensor_ctx,
             sl_recent_locations=recent_locations,
             sl_known_avatar=known_avatar,
@@ -98,6 +103,7 @@ def create_sl_app(agent: AgentCore, settings: Settings, sensor_store: SensorStor
                 actions=[],
             )
 
+        logger.info("SL reply: client=%s actions=%s", payload.client, result.sl_actions)
         return SLOutboundResponse(
             reply=cap_reply(result.text, grid=payload.grid),
             actions=result.sl_actions[:5],

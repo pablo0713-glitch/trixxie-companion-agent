@@ -34,43 +34,67 @@ WEB_SEARCH_SCHEMA = {
     },
 }
 
-SL_ACTION_SCHEMA = {
-    "name": "sl_action",
-    "description": (
-        "Send a Second Life action from your avatar. "
-        "Only available in Second Life — do not call this on Discord. "
-        "Actions are queued and executed after your reply is sent. "
-        "Note: your text reply is already delivered automatically — "
-        "as public local chat for channel 0 messages, or private IM for /42 messages. "
-        "Use sl_action for additional actions beyond the main reply."
+_SL_ACTION_BASE_DESCRIPTION = (
+    "Send a Second Life action from your avatar. "
+    "Only available in Second Life — do not call this on Discord. "
+    "Actions are queued and executed after your reply is sent. "
+    "Note: your text reply is already delivered automatically — "
+    "as public local chat for channel 0 messages, or private IM for /42 messages. "
+    "Use sl_action for additional actions beyond the main reply."
+)
+
+_SL_ACTION_TYPE_DESCRIPTIONS = {
+    "lsl": (
+        "'say' = speak in public local chat (channel 0), visible to everyone nearby. "
+        "'im' = send a private instant message to the target avatar. "
+        "'emote' = send *action text* as a private IM to the target avatar. "
+        "'anim_trigger' = play a named animation on your avatar."
     ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "action_type": {
-                "type": "string",
-                "enum": ["say", "im", "emote", "anim_trigger", "mute_avatar", "unmute_avatar"],
-                "description": (
-                    "'say' = speak in public local chat (channel 0), visible to everyone nearby. "
-                    "'im' = send a private instant message to the target avatar. "
-                    "'emote' = send *action text* as a private IM to the target avatar. "
-                    "'anim_trigger' = play a named animation on your avatar. "
-                    "'mute_avatar' = mute/block an avatar (text, voice, particles, sounds); requires target_key UUID. "
-                    "'unmute_avatar' = remove a mute/block from an avatar; requires target_key UUID."
-                ),
-            },
-            "text": {
-                "type": "string",
-                "description": "The text to send, or animation name for anim_trigger. Max 1023 chars. Optional for mute_avatar/unmute_avatar (used as display name in feedback).",
-            },
-            "target_key": {
-                "type": "string",
-                "description": "Avatar UUID. Required for mute_avatar/unmute_avatar. Defaults to the current user for other types.",
-            },
-        },
-        "required": ["action_type"],
-    },
+    "lua": (
+        "'say' = speak in public local chat (channel 0), visible to everyone nearby. "
+        "'im' = send a private instant message to the target avatar. "
+        "'emote' = send *action text* as a private IM to the target avatar. "
+        "'anim_trigger' = play a named animation on your avatar. "
+        "'mute_avatar' = mute/block an avatar (text, voice, particles, sounds); set target_key to SL UUID, text to display name. "
+        "'unmute_avatar' = remove a mute/block; set target_key to SL UUID, text to display name. "
+        "'is_muted' = check whether an avatar is muted; set target_key to SL UUID — result is sent back as an IM."
+    ),
 }
+
+_SL_ACTION_ENUMS = {
+    "lsl": ["say", "im", "emote", "anim_trigger"],
+    "lua": ["say", "im", "emote", "anim_trigger", "mute_avatar", "unmute_avatar", "is_muted"],
+}
+
+
+def _build_sl_action_schema(sl_client: str) -> dict:
+    client = sl_client if sl_client in _SL_ACTION_ENUMS else "lsl"
+    return {
+        "name": "sl_action",
+        "description": _SL_ACTION_BASE_DESCRIPTION,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action_type": {
+                    "type": "string",
+                    "enum": _SL_ACTION_ENUMS[client],
+                    "description": _SL_ACTION_TYPE_DESCRIPTIONS[client],
+                },
+                "text": {
+                    "type": "string",
+                    "description": (
+                        "The text to send, or animation name for anim_trigger. Max 1023 chars. "
+                        "For mute_avatar / unmute_avatar / is_muted: the avatar's display name."
+                    ),
+                },
+                "target_key": {
+                    "type": "string",
+                    "description": "Avatar UUID. Required for mute_avatar / unmute_avatar / is_muted — use the SL UUID shown in the avatar context block.",
+                },
+            },
+            "required": ["action_type"],
+        },
+    }
 
 NOTE_WRITE_SCHEMA = {
     "name": "note_write",
@@ -241,7 +265,7 @@ class ToolRegistry:
         if cfg_tools.get("notes", True):
             tools.extend([NOTE_WRITE_SCHEMA, NOTE_READ_SCHEMA, NOTE_LIST_SCHEMA])
         if context.platform == "sl" and cfg_tools.get("sl_action", True):
-            tools.append(SL_ACTION_SCHEMA)
+            tools.append(_build_sl_action_schema("lua"))
         tools.append(MEMORY_SCHEMA)
         if self._session_index is not None:
             tools.append(SESSION_QUERY_SCHEMA)

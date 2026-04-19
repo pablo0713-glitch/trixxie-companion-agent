@@ -116,7 +116,7 @@ Hey Trixxie, what do you think of this sim?
 Trix, come look at this outfit!
 ```
 
-Any name in the `TRIGGER_NAMES` list at the top of the HUD script counts — default is `["Trixxie", "Trix"]`. Add aliases freely. Her reply appears in local chat, visible to everyone nearby (it comes from the HUD object, not her avatar, so it shows in a slightly different color).
+Any name in the `TRIGGER_NAMES` list at the top of the HUD script counts — default is `["Trixxie", "Trix", "Trixx"]`. Add aliases freely. Her reply appears in local chat, visible to everyone nearby (it comes from the HUD object, not her avatar, so it shows in a slightly different color).
 
 > **Setup required:** See [Second Life Setup](#second-life-setup) below.
 

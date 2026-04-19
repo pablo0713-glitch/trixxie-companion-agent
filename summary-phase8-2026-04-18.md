@@ -134,25 +134,66 @@ The stride-3 avatar scan list `[dist, key, name]` was introduced to support per-
 
 ---
 
+## Mute/Unmute — Full Debugging and Fix (second session, 2026-04-18)
+
+The mute feature was wired in phase 7 but had no visible effect. A full debugging cycle identified and fixed three separate root causes.
+
+### Root cause 1 — Wrong argument type for `AddMute`
+
+Per the Cool VL Viewer Lua manual (page 14), `AddMute(name_or_id, type)` with `type=1` ("avatar by Id") requires a **UUID**, not a display name. An earlier change had switched from UUID to display name — this was incorrect. The call always failed silently because Cool VL discards mute requests with the wrong argument shape.
+
+**Fix:** `lua/trixxie_companion.lua` — mute/unmute/is_muted handlers now use `action["target_key"]` (UUID) with `ctx.origin_id` as fallback. Display name (`action["text"]`) is used only for the feedback IM.
+
+### Root cause 2 — Agent had no UUID to pass
+
+The agent could see the current conversation partner's display name but not their UUID. For third-party mutes ("mute SashaSativa"), the only UUID source was the avatar radar — but the radar payload only included `name` and `distance`. The agent had no way to look up SashaSativa's UUID.
+
+**Fixes:**
+- `lsl/companion_bridge.lsl` — avatar scan JSON now includes `"key": "<uuid>"` for each nearby avatar
+- `core/persona.py` — `_format_sensor_context()` renders the UUID inline: `Name (12.3m) [UUID: ...]`
+- `interfaces/sl_bridge/server.py` — `sl_uuid` (raw UUID, `sl_` prefix stripped) injected into `known_avatar` dict before passing to `MessageContext`
+- `core/persona.py` — `_format_known_avatar()` now shows `SL UUID: <uuid>` in Block 1
+- `core/tools.py` — `target_key` field description updated: UUID required for mute types, not display name
+- `data/agent_config.json` — mute/unmute/is_muted descriptions updated to reference `target_key` (UUID from nearby avatars list)
+
+### Root cause 3 — Cool VL Viewer `DecodeJSON` unwraps single-element arrays
+
+`OnHTTPReply` printed `"processing 0 actions"` even when the Python server confirmed the actions list was non-empty. Raw reply logging revealed the JSON was arriving correctly (`"actions":[{...}]`), but Cool VL Viewer's `DecodeJSON` implementation **unwraps single-element JSON arrays into the object itself** — `[{"action_type":"mute_avatar",...}]` became `{"action_type":"mute_avatar",...}`. `ipairs()` then iterated the object's keys (`action_type`, `target_key`, `text`), not the intended action.
+
+**Fix:** `lua/trixxie_companion.lua` — `OnHTTPReply` now normalizes `raw_actions` into `action_list` before iterating:
+- If `raw_actions["action_type"] ~= nil` → single object was unwrapped → wrap in `{raw_actions}`
+- Otherwise → iterate numerically (0-based then 1-based) to handle multi-action arrays
+
+### Additional: `is_muted` action type
+
+Added `is_muted` as a new `sl_action` type (read-only query). The agent calls it with `target_key` (UUID); Lua calls `IsMuted(uuid, 1)` and sends the result back as an IM. Platform awareness clarifies that `is_muted` is a query, not a toggle — the agent must not assume calling it changes mute state.
+
+### Debug tooling added and cleaned up
+
+- `interfaces/sl_bridge/server.py` — action log promoted from `DEBUG` to `INFO` level to always appear in the server console
+- `lua/trixxie_companion.lua` — `print()` debug traces added throughout the action loop during diagnosis (retained for ongoing troubleshooting)
+
+---
+
 ## Files Changed
 
 | File | Change |
 |---|---|
-| `core/tools.py` | `mute_avatar`/`unmute_avatar` in `SL_ACTION_SCHEMA`; `SESSION_QUERY_SCHEMA` added |
-| `core/tool_handlers/sl_action.py` | Mute/unmute action types |
+| `core/tools.py` | `mute_avatar`/`unmute_avatar`/`is_muted` in schema; `target_key` described as UUID; `SESSION_QUERY_SCHEMA` added |
+| `core/tool_handlers/sl_action.py` | Mute/unmute/is_muted action types |
 | `core/tool_handlers/session_query.py` | New — `session_query` handler |
 | `core/tool_handlers/session_search.py` | Removed `user_id` filter; `display_name` in output |
-| `core/persona.py` | Conversation integrity rule; voice awareness text; `"voice": False` default |
+| `core/persona.py` | Conversation integrity rule; voice awareness; UUID in known avatar block; UUID in avatar radar display |
 | `core/agent.py` | `display_name` passed to `append_turn()` |
 | `memory/session_index.py` | `display_name` column; FTS migration; `backfill_display_names()`; `query()` |
 | `memory/base.py` | `display_name` in abstract `append_turn()` |
-| `memory/file_store.py` | `display_name` threaded through |
-| `interfaces/sl_bridge/server.py` | `SLVoicePayload`; `POST /sl/voice` stub |
+| `memory/file_store.py` | `display_name` threaded through; `_sanitize_tool_pairs()` for orphaned tool_result fix |
+| `interfaces/sl_bridge/server.py` | `SLVoicePayload`; `POST /sl/voice` stub; `sl_uuid` injected into known_avatar; action log at INFO |
 | `setup/wizard.js` | Voice tool card in Step 5 |
-| `lua/trixxie_companion.lua` | Mute/unmute action routing |
-| `lsl/companion_bridge.lsl` | Startup scans; `s_voice` toggle + menu; `TRIGGER_NAMES` + "Trixx"; `AGENT_IN_VOICE` removed |
-| `data/agent_config.json` | `"voice": false`; voice awareness; conversation integrity rule |
+| `lua/trixxie_companion.lua` | Mute/unmute/is_muted routing; `DecodeJSON` single-element array normalization; UUID for `AddMute`/`RemoveMute`/`IsMuted`; debug traces |
+| `lsl/companion_bridge.lsl` | Startup scans; `s_voice` toggle + menu; `TRIGGER_NAMES` + "Trixx"; `AGENT_IN_VOICE` removed; `"key"` field in avatar JSON |
+| `data/agent_config.json` | `"voice": false`; voice awareness; mute descriptions updated to reference UUID + `target_key` |
 | `main.py` | Startup `backfill_display_names()` |
-| `ARCHITECTURE.md` | LSL HUD internals merged in; session search/query updated |
+| `ARCHITECTURE.md` | LSL HUD internals merged in; avatar sensor format updated with `key`; mute action table updated; is_muted documented |
 | `lsl/ARCHITECTURE.md` | Deleted — content merged into root ARCHITECTURE.md |
-| `README.md` | `session_query.py` added; `lsl/ARCHITECTURE.md` removed from layout |
+| `README.md` | `session_query.py` added; `lsl/ARCHITECTURE.md` removed; TRIGGER_NAMES default updated |

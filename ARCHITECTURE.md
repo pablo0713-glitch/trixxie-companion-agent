@@ -453,7 +453,7 @@ The data *inside* the prompt comes from sources with different update frequencie
 | STM bridge | Rolling 10 summaries per linked uid — injected when linked IDs exist |
 | **Environment** (region, parcel, description, rating) | Refreshed on startup, region change, parcel crossing, and every 600s — **always included** |
 | **RLV / avatar state** (sitting, autopilot, teleport, position) | Refreshed every 30s — **always included** |
-| Avatars | Refreshed every 150s — included only when updated since the user's last message |
+| Avatars | Refreshed every 60s — included only when updated since the user's last message |
 | Objects | Refreshed every 300s — included only when updated since the user's last message |
 | Chat | Flushed every 90s and immediately before each message — included only when new lines arrived |
 | Clothing | Triggered manually via HUD menu — included only when a new scan result is available |
@@ -504,7 +504,7 @@ The platform awareness block tells the agent what it can perceive, what it canno
 | 5 | STM bridge | `_load_stm_bridge(linked_ids)` — rolling exchange summaries | If linked platform IDs exist |
 | 6 | Sensor context | `SensorStore.get_changes()` — objects grouped by (name,owner) | SL only, if non-empty |
 | 7 | Places visited | `LocationStore.get_recent_visits()` | SL only, if non-empty |
-| 8 | Known avatar | `AvatarStore.get_avatar_async()` — display name, channels, first/last seen | SL only, if avatar has prior record |
+| 8 | Known avatar | `AvatarStore.get_avatar_async()` — display name, SL UUID, channels, first/last seen | SL only, if avatar has prior record |
 
 ---
 
@@ -644,8 +644,11 @@ Up to 5 actions are processed per reply path:
 | `say` | `say_chunked(text)` — public `llSay(0)` | `say_chunked(text)` — public `llSay(0)` |
 | `im` | `llInstantMessage(sender, text)` | *(not processed)* |
 | `emote` | `llInstantMessage(sender, "*text*")` | `say_chunked("*text*")` |
-| `mute_avatar` | `AddMute(target_key, 1)` | `AddMute(target_key, 1)` |
-| `unmute_avatar` | `RemoveMute(target_key, 1)` | `RemoveMute(target_key, 1)` |
+| `mute_avatar` | `AddMute(target_key, 1)` *(Lua only)* | `AddMute(target_key, 1)` *(Lua only)* |
+| `unmute_avatar` | `RemoveMute(target_key, 1)` *(Lua only)* | `RemoveMute(target_key, 1)` *(Lua only)* |
+| `is_muted` | `IsMuted(target_key, 1)` → `SendIM` result *(Lua only)* | *(not processed)* |
+
+`target_key` for mute actions must be the avatar UUID. `text` is the display name (used only for the feedback IM). Mute/unmute/is_muted actions are only executable from the Lua path (`OnHTTPReply`); the LSL HUD path does not implement them. `is_muted` is read-only — it reports current mute state without changing it.
 
 The primary `reply` text follows the same rule: channel 42 → `llInstantMessage`; channel 0 → `llSay(0)`.
 
@@ -654,11 +657,11 @@ The primary `reply` text follows the same rule: channel 42 → `llInstantMessage
 #### `avatars`
 ```json
 [
-  { "name": "Display Name", "distance": 12.3 },
+  { "name": "Display Name", "distance": 12.3, "key": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" },
   ...
 ]
 ```
-Sourced from `llGetAgentList(AGENT_LIST_REGION, [])`. Sorted nearest-first, capped at **25 entries** (Stack-Heap Collision protection for crowded sims). HUD owner excluded. Distances rounded to 1 decimal.
+Sourced from `llGetAgentList(AGENT_LIST_REGION, [])`. Sorted nearest-first, capped at **25 entries** (Stack-Heap Collision protection for crowded sims). HUD owner excluded. Distances rounded to 1 decimal. `key` is the avatar UUID — injected into the sensor context so the agent can use it as `target_key` for `sl_action` mute/unmute/is_muted calls.
 
 #### `environment`
 ```json
@@ -732,7 +735,7 @@ Single 30-second tick (`TICK_SECS = 30.0`). All scanning is driven by tick count
 | Parcel crossing | immediate | env + objects + rlv |
 | Every 1 tick | 30 s | RLV / avatar state |
 | Every 3 ticks | 90 s | chat flush |
-| Every 5 ticks | 150 s | avatars |
+| Every 2 ticks | 60 s | avatars |
 | Every 10 ticks | 300 s | objects |
 | Every 20 ticks | 600 s | environment (time-of-day drift) |
 | On /42 received | immediate | chat flush + rlv (per-message mode only: + avatars + env) |

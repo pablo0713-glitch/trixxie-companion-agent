@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from core.persona import MessageContext
 
-VALID_ACTION_TYPES = {"say", "im", "emote", "anim_trigger", "mute_avatar", "unmute_avatar"}
+VALID_ACTION_TYPES = {"say", "im", "emote", "anim_trigger", "mute_avatar", "unmute_avatar", "is_muted"}
+
+_MUTE_VERBS = {"mute_avatar": "Muted", "unmute_avatar": "Unmuted", "is_muted": "Checking mute status for"}
 
 
 async def handle_sl_action(
@@ -21,26 +23,32 @@ async def handle_sl_action(
     if action_type not in VALID_ACTION_TYPES:
         return f"Unknown action type '{action_type}'. Valid types: {', '.join(sorted(VALID_ACTION_TYPES))}"
 
-    is_mute_type = action_type in ("mute_avatar", "unmute_avatar")
+    is_mute_type = action_type in _MUTE_VERBS
 
     if not text and not is_mute_type:
         return "No text provided for action."
 
     if is_mute_type:
-        if not target_key:
-            return f"{action_type} requires target_key (avatar UUID)."
+        display_name = text  # preferred: display name passed via text field
         if target_key.startswith("sl_"):
             target_key = target_key[3:]
-        label = text or target_key
-        action_queue.append({"action_type": action_type, "target_key": target_key})
-        verb = "Muted" if action_type == "mute_avatar" else "Unmuted"
+        if not display_name and not target_key:
+            return f"{action_type} requires the avatar's display name (text field) or target_key (UUID)."
+        action: dict = {"action_type": action_type}
+        if display_name:
+            action["text"] = display_name
+        if target_key:
+            action["target_key"] = target_key
+        action_queue.append(action)
+        label = display_name or target_key
+        verb = _MUTE_VERBS[action_type]
         return f"{verb} {label}"
 
     # Trim to SL limits
     if len(text) > 1023:
         text = text[:1020] + "..."
 
-    action: dict = {"action_type": action_type, "text": text}
+    action = {"action_type": action_type, "text": text}
     if target_key:
         action["target_key"] = target_key
 

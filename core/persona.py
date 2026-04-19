@@ -82,7 +82,8 @@ _DEFAULT_CONFIG: dict = {
             "- RLV clothing scans when triggered\n\n"
             "**You can:**\n"
             "- reply via private IM (never public chat)\n"
-            "- use `sl_action` for emotes or IMs\n"
+            "- use `sl_action` for emotes, IMs, mute/unmute, and animations\n"
+            "- sl_action is the ONLY way to affect the in-world state — text alone has no effect\n"
             "- use search/notes tools\n"
             "- reference Discord conversations if linked\n\n"
             "**You cannot:**\n"
@@ -165,6 +166,7 @@ class MessageContext:
     person_id: str = ""     # canonical person ID resolved from PersonMap; falls back to user_id
     sl_region: str | None = None
     sl_grid: str = "sl"
+    sl_client: str = "lsl"   # "lsl" (HUD /42) or "lua" (Cool VL Viewer direct IM)
     sl_sensor_context: dict = field(default_factory=dict)
     sl_recent_locations: list[dict] = field(default_factory=list)
     sl_known_avatar: dict | None = None
@@ -346,6 +348,8 @@ def _format_recent_locations(locations: list[dict]) -> str:
 def _format_known_avatar(av: dict) -> str:
     lines = ["## This Conversation's Avatar"]
     lines.append(f"Display name: {av.get('display_name', '?')}")
+    if av.get("sl_uuid"):
+        lines.append(f"SL UUID: {av['sl_uuid']}")
     channels = ", ".join(av.get("channels", []))
     if channels:
         lines.append(f"Channels seen: {channels}")
@@ -387,8 +391,13 @@ def _format_sensor_context(ctx: dict) -> str:
 
     avatars = ctx.get("avatars")
     if avatars:
-        av_str = ", ".join(f"{a.get('name', '?')} ({a.get('distance', '?')}m)" for a in avatars)
-        lines.append(f"Nearby avatars{_age_label(ages, 'avatars')}: {av_str}")
+        av_parts = []
+        for a in avatars:
+            entry = f"{a.get('name', '?')} ({a.get('distance', '?')}m)"
+            if a.get("key"):
+                entry += f" [UUID: {a['key']}]"
+            av_parts.append(entry)
+        lines.append(f"Nearby avatars{_age_label(ages, 'avatars')}: {', '.join(av_parts)}")
 
     objects = ctx.get("objects")
     if objects:

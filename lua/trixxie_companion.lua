@@ -107,6 +107,7 @@ function OnInstantMsg(session_id, origin_id, msg_type, name, text)
         region       = region,
         channel      = 42,
         grid         = GRID,
+        client       = "lua",
     }
 
     -- Include secret in body (PostHTTP does not support custom headers).
@@ -152,20 +153,57 @@ function OnHTTPReply(handle, success, reply)
     end
 
     -- Deliver any action lines (im / emote / mute / unmute).
-    local actions = data["actions"]
-    if actions then
-        for _, action in ipairs(actions) do
+    local raw_actions = data["actions"]
+    -- CoolVL's DecodeJSON unwraps single-element JSON arrays into the object itself.
+    -- Normalize to an ipairs-compatible list regardless of how many actions there are.
+    local action_list = {}
+    if type(raw_actions) == "table" then
+        if raw_actions["action_type"] ~= nil then
+            -- Single action was decoded as a plain object (array wrapper stripped).
+            action_list[1] = raw_actions
+        else
+            -- Multiple actions: try 0-based first, then 1-based.
+            local i = 0
+            while raw_actions[i] ~= nil do
+                action_list[#action_list + 1] = raw_actions[i]
+                i = i + 1
+            end
+            if #action_list == 0 then
+                i = 1
+                while raw_actions[i] ~= nil do
+                    action_list[#action_list + 1] = raw_actions[i]
+                    i = i + 1
+                end
+            end
+        end
+    end
+    print("OnHTTPReply: processing " .. tostring(#action_list) .. " action(s)")
+    if #action_list > 0 then
+        for idx, action in ipairs(action_list) do
             local atype = action["action_type"] or "im"
             local atext = action["text"] or ""
+            print("OnHTTPReply: action[" .. tostring(idx) .. "] type=" .. atype .. " text=" .. atext)
             if atype == "mute_avatar" then
-                local target_key = action["target_key"] or ""
-                if target_key ~= "" then
-                    AddMute(target_key, 1)
-                end
+                -- type=1 (avatar by Id) requires UUID, not display name.
+                local uuid = action["target_key"] or ctx.origin_id or ""
+                local label = action["text"] or uuid
+                print("OnHTTPReply: calling AddMute uuid=" .. uuid)
+                if uuid ~= "" then AddMute(uuid, 1) end
+                print("OnHTTPReply: AddMute returned")
             elseif atype == "unmute_avatar" then
-                local target_key = action["target_key"] or ""
-                if target_key ~= "" then
-                    RemoveMute(target_key, 1)
+                local uuid = action["target_key"] or ctx.origin_id or ""
+                local label = action["text"] or uuid
+                print("OnHTTPReply: calling RemoveMute uuid=" .. uuid)
+                if uuid ~= "" then RemoveMute(uuid, 1) end
+                print("OnHTTPReply: RemoveMute returned")
+            elseif atype == "is_muted" then
+                local uuid = action["target_key"] or ctx.origin_id or ""
+                local label = action["text"] or uuid
+                print("OnHTTPReply: calling IsMuted uuid=" .. uuid)
+                if uuid ~= "" then
+                    local muted = IsMuted(uuid, 1)
+                    print("OnHTTPReply: IsMuted=" .. tostring(muted))
+                    SendIM(ctx.session_id, label .. " is " .. (muted and "muted" or "not muted"))
                 end
             elseif atext ~= "" then
                 if atype == "emote" then
@@ -177,6 +215,8 @@ function OnHTTPReply(handle, success, reply)
                 SendIM(ctx.session_id, atext)
             end
         end
+    else
+        print("OnHTTPReply: actions field is nil/absent in response")
     end
 end
 

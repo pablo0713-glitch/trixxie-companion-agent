@@ -37,7 +37,7 @@ integer AV_MAX      = 25;
 // --- Timer ---
 float   TICK_SECS  = 30.0;
 integer tick       = 0;
-integer AV_TICKS   = 5;    // avatar scan every  5 ticks =  150s
+integer AV_TICKS   = 2;    // avatar scan every  2 ticks =   60s
 integer OBJ_TICKS  = 10;   // object scan every 10 ticks =  300s
 integer ENV_TICKS  = 20;   // env scan every    20 ticks =  600s (time-of-day drift)
 integer CHAT_TICKS = 3;    // chat flush every   3 ticks =   90s
@@ -224,7 +224,7 @@ do_avatar_scan()
         key     aid      = llList2Key(nearby, i * 3 + 1);
         string  aname    = llList2String(nearby, i * 3 + 2);
         if (i > 0) arr += ",";
-        arr += "{\"name\":\"" + json_s(aname) + "\",\"distance\":" + (string)rd + "}";
+        arr += "{\"name\":\"" + json_s(aname) + "\",\"distance\":" + (string)rd + ",\"key\":\"" + (string)aid + "\"}";
     }
     arr += "]";
     nearby = []; // free before sensor_post to avoid double-copy peak
