@@ -35,8 +35,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _run_setup_wizard_only() -> None:
+    from fastapi import FastAPI
+    app = FastAPI()
+    app.include_router(create_setup_router())
+    app.mount(
+        "/setup/static",
+        StaticFiles(directory=str(Path(__file__).parent / "setup")),
+        name="setup_static",
+    )
+    port = int(os.getenv("SL_BRIDGE_PORT", "8080"))
+    host = os.getenv("SL_BRIDGE_HOST", "0.0.0.0")
+    logger.warning(
+        "Missing required config — wizard-only mode. Open http://%s:%s/setup to configure.",
+        host,
+        port,
+    )
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
 async def main() -> None:
-    settings = load_settings()
+    try:
+        settings = load_settings()
+    except EnvironmentError as exc:
+        logger.error("%s", exc)
+        await _run_setup_wizard_only()
+        return
 
     os.makedirs(settings.memory_dir, exist_ok=True)
     os.makedirs(settings.notes_dir, exist_ok=True)
