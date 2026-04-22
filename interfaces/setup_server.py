@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,13 @@ _MASK = "••••••••"
 class _SetupBody(BaseModel):
     env: dict[str, str]
     agent_config: dict[str, Any]
+
+
+class _ScriptUpdateBody(BaseModel):
+    url: str
+    secret: str
+    triggers: list[str]
+    opensim: bool = False
 
 
 def create_setup_router() -> APIRouter:
@@ -125,6 +133,51 @@ def create_setup_router() -> APIRouter:
         except Exception as exc:
             logger.exception("Setup config save failed: %s", exc)
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    @router.post("/setup/update-scripts")
+    async def update_scripts(body: _ScriptUpdateBody) -> JSONResponse:
+        lsl_path = _ROOT / "lsl" / "companion_bridge.lsl"
+        lua_path = _ROOT / "lua" / "agent_companion.lua"
+        grid = "opensim" if body.opensim else "sl"
+        triggers_lsl = ", ".join(f'"{t}"' for t in body.triggers if t)
+        results: dict[str, str] = {}
+
+        def _sub_str(pattern: str, value: str, text: str) -> str:
+            return re.sub(pattern, lambda m: m.group(1) + value + m.group(2), text)
+
+        if lsl_path.exists():
+            try:
+                text = lsl_path.read_text(encoding="utf-8")
+                text = _sub_str(r'(string\s+SERVER_URL\s*=\s*")[^"]*(")', body.url, text)
+                text = _sub_str(r'(string\s+SECRET\s*=\s*")[^"]*(")', body.secret, text)
+                text = _sub_str(r'(string\s+GRID\s*=\s*")[^"]*(")', grid, text)
+                text = re.sub(
+                    r'(list\s+TRIGGER_NAMES\s*=\s*\[)[^\]]*(\])',
+                    lambda m: m.group(1) + triggers_lsl + m.group(2),
+                    text,
+                )
+                lsl_path.write_text(text, encoding="utf-8")
+                results["lsl"] = "ok"
+            except Exception as exc:
+                results["lsl"] = str(exc)
+        else:
+            results["lsl"] = "not found"
+
+        if lua_path.exists():
+            try:
+                text = lua_path.read_text(encoding="utf-8")
+                text = _sub_str(r'(local\s+SERVER_URL\s*=\s*")[^"]*(")', body.url, text)
+                text = _sub_str(r'(local\s+SECRET\s*=\s*")[^"]*(")', body.secret, text)
+                text = _sub_str(r'(local\s+GRID\s*=\s*")[^"]*(")', grid, text)
+                lua_path.write_text(text, encoding="utf-8")
+                results["lua"] = "ok"
+            except Exception as exc:
+                results["lua"] = str(exc)
+        else:
+            results["lua"] = "not found"
+
+        ok = all(v == "ok" for v in results.values())
+        return JSONResponse({"ok": ok, "results": results})
 
     return router
 

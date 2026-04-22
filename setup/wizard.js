@@ -293,6 +293,7 @@ function prev() {
 
 async function next() {
   collectCurrent();
+  if (currentStep === 3 && state.sl_enabled) await updateScripts(true);
   if (currentStep < TOTAL) { currentStep++; render(); scrollTo(0, 0); }
   else await save();
 }
@@ -591,12 +592,18 @@ function buildStep3() {
           <p class="form-hint" style="margin-top:0.5rem">
             Copy <code>lua/agent_companion.lua</code> to your Cool VL Viewer user settings folder and rename it <code>automation.lua</code>:<br>
             <strong>Linux:</strong> <code>~/.secondlife/user_settings/automation.lua</code><br>
-            <strong>Windows:</strong> <code>%APPDATA%\SecondLife\user_settings\automation.lua</code><br>
+            <strong>Windows:</strong> <code>&#37;APPDATA&#37;\\SecondLife\\user_settings\\automation.lua</code><br>
             <strong>macOS:</strong> <code>~/Library/Application Support/SecondLife/user_settings/automation.lua</code><br>
             If <code>automation.lua</code> already exists, append the contents instead of replacing it.
             Load or reload via <strong>Advanced → Lua Scripting → Load a Lua script</strong> in Cool VL Viewer (no viewer restart needed).
           </p>
         </div>
+
+        <div style="margin-top:1rem;display:flex;align-items:center;gap:1rem">
+          <button id="btn-update-scripts" class="btn btn-primary" onclick="collectStep3(); updateScripts()">Update Scripts</button>
+          <span id="script-update-status" style="font-size:12px"></span>
+        </div>
+        <p class="form-hint">Writes your URL, secret, and trigger names directly into <code>lsl/companion_bridge.lsl</code> and <code>lua/agent_companion.lua</code>. Also runs automatically when you click Next.</p>
       </div>
     </div>`;
 }
@@ -641,6 +648,42 @@ function copySnippet(id) {
     const btn = el.nextElementSibling;
     if (btn) { const orig = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = orig, 1500); }
   });
+}
+
+async function updateScripts(silent) {
+  const url     = document.getElementById('f-sl-url')?.value    || state.sl_bridge_url    || '';
+  const secret  = document.getElementById('f-sl-secret')?.value || state.sl_bridge_secret || '';
+  const t0      = document.getElementById('f-trigger-0')?.value || state.agent_name       || '';
+  const t1      = document.getElementById('f-trigger-1')?.value || '';
+  const t2      = document.getElementById('f-trigger-2')?.value || '';
+  const opensim = document.getElementById('f-opensim-on')?.checked ?? state.opensim_enabled;
+  const triggers = [t0, t1, t2].filter(Boolean);
+
+  const statusEl = document.getElementById('script-update-status');
+  const btnEl    = document.getElementById('btn-update-scripts');
+
+  if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Updating…'; }
+  if (statusEl) { statusEl.textContent = ''; statusEl.style.color = ''; }
+
+  try {
+    const res  = await fetch('/setup/update-scripts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, secret, triggers, opensim }),
+    });
+    const data = await res.json();
+    if (statusEl && !silent) {
+      statusEl.textContent = data.ok ? '✓ Scripts updated' : '✗ ' + JSON.stringify(data.results);
+      statusEl.style.color = data.ok ? '#4ade80' : '#f87171';
+    }
+  } catch (e) {
+    if (statusEl && !silent) {
+      statusEl.textContent = '✗ ' + e.message;
+      statusEl.style.color = '#f87171';
+    }
+  }
+
+  if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Update Scripts'; }
 }
 
 function toggleCard(checkbox, bodyId) {
