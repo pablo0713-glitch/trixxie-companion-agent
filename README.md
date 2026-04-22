@@ -64,6 +64,24 @@ A self-hosted AI companion that lives simultaneously in **Second Life** (or Open
 
 ---
 
+## Keeping Up to Date
+
+Pull the latest changes from inside your clone directory:
+
+```bash
+git pull
+```
+
+Then restart the agent:
+
+```bash
+./run.sh
+```
+
+Your `.env`, `data/`, and any local config are not touched by a pull.
+
+---
+
 <details>
 <summary><strong>Prerequisites</strong></summary>
 
