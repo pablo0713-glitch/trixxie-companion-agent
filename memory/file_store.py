@@ -233,6 +233,9 @@ def _sanitize_tool_pairs(turns: list[dict]) -> list[dict]:
               tool_result in the immediately following user turn (can occur when
               pass 1 empties that user turn and drops it entirely).
     """
+    # Drop empty-content turns — they are invalid API messages and confuse the model.
+    turns = [t for t in turns if t.get("content")]
+
     if len(turns) < 2:
         return turns
 

@@ -139,6 +139,8 @@ class AgentCore:
             )
 
         for turn in assistant_turns:
+            if not turn.get("content"):
+                continue
             await self._memory.append_turn(
                 context.user_id,
                 context.channel_id,

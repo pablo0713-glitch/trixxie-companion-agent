@@ -17,7 +17,8 @@ local GRID          = "sl"       -- "sl" or "opensim"
 local IM_CHUNK_SIZE = 1000       -- max chars per SendIM call
 
 -- --- State ---
-local pending_ims = {}    -- [handle] = {session_id, origin_id}
+local pending_ims  = {}   -- [handle] = {session_id, origin_id}
+local sent_replies = {}   -- [text] = timestamp — echo suppression
 
 
 -- ================================================================
@@ -73,7 +74,9 @@ end
 -- Deliver a (potentially long) reply as successive SendIM calls.
 local function send_chunked(session_id, text)
     local chunks = split_chunks(text)
+    local now    = os.time()
     for _, chunk in ipairs(chunks) do
+        sent_replies[chunk] = now   -- stamp before sending so echo arrives after
         SendIM(session_id, chunk)
     end
 end
@@ -90,6 +93,15 @@ function OnInstantMsg(session_id, origin_id, msg_type, name, text)
     -- Ignore messages sent by this avatar (Trixxie herself).
     local self_info = GetAgentInfo()
     if self_info and origin_id == self_info["id"] then return end
+
+    -- Suppress echo: Cool VL Viewer reflects sent IMs back through OnInstantMsg
+    -- with the recipient's origin_id rather than the sender's, bypassing the
+    -- self-check above. Reject any text that matches a recently sent reply.
+    local now = os.time()
+    for sent_text, ts in pairs(sent_replies) do
+        if now - ts > 10 then sent_replies[sent_text] = nil  -- expire after 10s
+        elseif text == sent_text then return end
+    end
 
     -- Build the POST payload.
     local region = ""
