@@ -7,6 +7,8 @@ data/agent_config.json
 data/identity/
 data/person_map.json
 summary-phase*.md
+*.code-workspace
+.vscode/
 __pycache__/
 *.pyc
 *.pyo
