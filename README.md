@@ -73,7 +73,7 @@ A self-hosted AI companion that lives simultaneously in **Second Life** (or Open
 - An **Anthropic API key** — [console.anthropic.com](https://console.anthropic.com) — or a local [Ollama](https://ollama.com) install
 - **Discord** (optional) — a bot application from the [Discord Developer Portal](https://discord.com/developers)
 - **Second Life or OpenSimulator** (optional) — an avatar account and the viewer of your choice
-- **cloudflared** (required for Second Life) — free tunnel that gives the SL servers a public HTTPS URL to reach your local bridge
+- **A public HTTPS tunnel** (required for Second Life) — cloudflared is the default; ngrok, bore, or a VPS with nginx all work too
 
 </details>
 
@@ -174,7 +174,9 @@ Persona changes take effect immediately on the next message. Model and credentia
 
 ### 1. Expose the bridge
 
-SL servers make outbound HTTP calls — `localhost` is unreachable from their side. Cloudflared creates a free public tunnel:
+SL servers make outbound HTTP calls — `localhost` is unreachable from their side. You need a public HTTPS URL pointing at your local bridge. **Cloudflared is the default and easiest method**, but any tunneling solution works (ngrok, bore, a VPS with nginx, a named Cloudflare tunnel, etc.).
+
+**Cloudflared (recommended):**
 
 ```bash
 # Install cloudflared
@@ -185,9 +187,9 @@ sudo dpkg -i cloudflared-linux-amd64.deb
 cloudflared tunnel --url http://localhost:8080
 ```
 
-Copy the `https://` URL it prints. You'll need it for the HUD script.
+Copy the `https://` URL it prints — you'll enter it into the wizard and paste it into the HUD script.
 
-> **Note:** The tunnel URL changes every time cloudflared restarts unless you set up a [named tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/). For a permanent install, a named tunnel is recommended.
+> **Note:** The temporary tunnel URL changes every time cloudflared restarts. For a permanent URL, set up a [named tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) — recommended for any install you plan to leave running.
 
 ### 2. Create and wear the HUD
 

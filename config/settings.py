@@ -54,7 +54,12 @@ class Settings:
     memory_dir: str
     notes_dir: str
     memory_max_history: int
-    owner_name: str
+    owner_sl_name: str
+    owner_discord_name: str
+
+    # Second Life
+    sl_bridge_url: str
+    sl_trigger_names: list[str]
 
 
 _CLOUD_OPENAI_COMPAT = {"openai", "openrouter", "gemini", "grok"}
@@ -110,7 +115,12 @@ def load_settings() -> Settings:
         memory_dir=os.getenv("MEMORY_DIR", "./data/memory"),
         notes_dir=os.getenv("NOTES_DIR", "./data/notes"),
         memory_max_history=int(os.getenv("MEMORY_MAX_HISTORY", "20")),
-        owner_name=os.getenv("OWNER_NAME", ""),
+        owner_sl_name=os.getenv("OWNER_SL_NAME", ""),
+        owner_discord_name=os.getenv("OWNER_DISCORD_NAME", ""),
+        sl_bridge_url=os.getenv("SL_BRIDGE_URL", ""),
+        sl_trigger_names=[
+            t.strip() for t in os.getenv("SL_TRIGGER_NAMES", "").split(",") if t.strip()
+        ],
     )
 
 

@@ -95,7 +95,8 @@ const STEP_NAMES = ['Agent', 'Model', 'Platforms', 'Identity', 'Tools', 'Context
 
 const state = {
   agent_name: D.agent_name,
-  owner_name: '',
+  owner_sl_name: '',
+  owner_discord_name: '',
   pa_discord:  D.platform_awareness.discord,
   pa_sl:       D.platform_awareness.sl,
   pa_opensim:  D.platform_awareness.opensim,
@@ -117,7 +118,9 @@ const state = {
   discord_active_channel_ids: '',
   sl_enabled: false,
   sl_bridge_secret: '',
+  sl_bridge_url: '',
   sl_bridge_port: '8080',
+  sl_trigger_names: ['', '', ''],
   opensim_enabled: false,
   agent_md: D.agent_md,
   soul_md: D.soul_md,
@@ -215,12 +218,18 @@ function applyConfig(config) {
   if (env.DISCORD_ALLOWED_GUILD_IDS) state.discord_allowed_guild_ids = env.DISCORD_ALLOWED_GUILD_IDS;
   if (env.DISCORD_ACTIVE_CHANNEL_IDS) state.discord_active_channel_ids = env.DISCORD_ACTIVE_CHANNEL_IDS;
   if (env.SL_BRIDGE_SECRET) { state.sl_bridge_secret = env.SL_BRIDGE_SECRET; state.sl_enabled = true; }
-  if (env.SL_BRIDGE_PORT) state.sl_bridge_port = env.SL_BRIDGE_PORT;
+  if (env.SL_BRIDGE_URL)    state.sl_bridge_url    = env.SL_BRIDGE_URL;
+  if (env.SL_BRIDGE_PORT)   state.sl_bridge_port   = env.SL_BRIDGE_PORT;
+  if (env.SL_TRIGGER_NAMES) {
+    const parts = env.SL_TRIGGER_NAMES.split(',').map(s => s.trim());
+    state.sl_trigger_names = [parts[0] || '', parts[1] || '', parts[2] || ''];
+  }
   if (env.OPENSIM_ENABLED === 'true') state.opensim_enabled = true;
   if (env.SEARCH_PROVIDER) state.search_provider = env.SEARCH_PROVIDER;
   if (env.SEARCH_API_KEY) { state.search_api_key = env.SEARCH_API_KEY; state.web_search_enabled = true; }
 
-  if (env.OWNER_NAME) state.owner_name = env.OWNER_NAME;
+  if (env.OWNER_SL_NAME)      state.owner_sl_name      = env.OWNER_SL_NAME;
+  if (env.OWNER_DISCORD_NAME) state.owner_discord_name = env.OWNER_DISCORD_NAME;
   if (ag.agent_name) state.agent_name = ag.agent_name;
   const id = (ag.identity && typeof ag.identity === 'object') ? ag.identity : {};
   if (id.agent_md) state.agent_md = id.agent_md;
@@ -312,9 +321,14 @@ function buildStep1() {
       You are <strong id="name-live">${esc(state.agent_name) || 'your agent'}</strong>.
     </div>
     <div class="form-group" style="margin-top:1.5rem">
-      <label for="f-owner-name">Your Name</label>
-      <input type="text" id="f-owner-name" class="form-input" value="${esc(state.owner_name)}" placeholder="e.g. Alex" maxlength="60">
-      <p class="form-hint">Your name as the agent's owner. Used to personalise memory notes and context.</p>
+      <label for="f-owner-sl-name">Your Second Life Name <span class="label-opt">(optional)</span></label>
+      <input type="text" id="f-owner-sl-name" class="form-input" value="${esc(state.owner_sl_name)}" placeholder="e.g. YourAvatar Resident" maxlength="80">
+      <p class="form-hint">Your SL avatar name. Used in memory notes and in-world context.</p>
+    </div>
+    <div class="form-group">
+      <label for="f-owner-discord-name">Your Discord Name <span class="label-opt">(optional)</span></label>
+      <input type="text" id="f-owner-discord-name" class="form-input" value="${esc(state.owner_discord_name)}" placeholder="e.g. yourname" maxlength="80">
+      <p class="form-hint">Your Discord username. Used in memory notes and Discord context.</p>
     </div>`;
 }
 
@@ -325,8 +339,9 @@ function bindStep1() {
 }
 
 function collectStep1() {
-  state.agent_name  = val('f-name')        || state.agent_name;
-  state.owner_name  = val('f-owner-name');
+  state.agent_name         = val('f-name') || state.agent_name;
+  state.owner_sl_name      = val('f-owner-sl-name');
+  state.owner_discord_name = val('f-owner-discord-name');
 }
 
 // ============================================================
@@ -523,9 +538,33 @@ function buildStep3() {
       </div>
       <div id="sl-body" class="card-body" style="display:${state.sl_enabled ? '' : 'none'}">
         <div class="form-group">
+          <label for="f-sl-url">Public Bridge URL</label>
+          <input type="text" id="f-sl-url" class="form-input" value="${esc(state.sl_bridge_url)}"
+            placeholder="https://your-tunnel.trycloudflare.com"
+            oninput="updateScriptSnippet()">
+          <p class="form-hint">The public HTTPS URL that the HUD will POST to. Cloudflared is the default — run <code>cloudflared tunnel --url http://localhost:${esc(state.sl_bridge_port)}</code> in a second terminal. Any other tunneling method works too.</p>
+        </div>
+        <div class="form-group">
           <label for="f-sl-secret">Bridge Secret <span class="label-opt">(optional)</span></label>
-          <input type="text" id="f-sl-secret" class="form-input" value="${esc(state.sl_bridge_secret)}" placeholder="shared_secret_here">
-          <p class="form-hint">Must match <code>SECRET</code> in the LSL HUD and Lua script.</p>
+          <input type="text" id="f-sl-secret" class="form-input" value="${esc(state.sl_bridge_secret)}"
+            placeholder="any_random_string"
+            oninput="updateScriptSnippet()">
+          <p class="form-hint">Any random string. Must match <code>SECRET</code> in the LSL HUD and Lua script.</p>
+        </div>
+        <div class="form-group">
+          <label>Agent Aliases <span class="label-opt">(local chat trigger names — up to 3)</span></label>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+            <input type="text" id="f-trigger-0" class="form-input" style="flex:1;min-width:120px"
+              value="${esc(state.sl_trigger_names[0])}" placeholder="Primary name"
+              oninput="updateScriptSnippet()">
+            <input type="text" id="f-trigger-1" class="form-input" style="flex:1;min-width:120px"
+              value="${esc(state.sl_trigger_names[1])}" placeholder="Alias 2"
+              oninput="updateScriptSnippet()">
+            <input type="text" id="f-trigger-2" class="form-input" style="flex:1;min-width:120px"
+              value="${esc(state.sl_trigger_names[2])}" placeholder="Alias 3"
+              oninput="updateScriptSnippet()">
+          </div>
+          <p class="form-hint">When any of these names appear in local chat, the agent responds publicly. The first field defaults to the agent's name if left blank.</p>
         </div>
         <div class="form-group">
           <label for="f-sl-port">Bridge Port</label>
@@ -538,25 +577,61 @@ function buildStep3() {
           </label>
           <span>OpenSimulator grid (caps replies at 1800 chars by default)</span>
         </div>
-      </div>
-    </div>
 
-    <div class="callout callout-info">
-      The SL bridge always starts on the configured port. Use
-      <code>cloudflared tunnel --url http://localhost:${esc(state.sl_bridge_port)}</code>
-      to expose it to SL/OpenSim servers.
+        <div class="callout callout-info" style="margin-top:1.5rem">
+          <strong>LSL HUD — paste at the top of <code>lsl/companion_bridge.lsl</code></strong>
+          <pre id="lsl-snippet" style="margin:0.75rem 0 0.5rem;white-space:pre-wrap;word-break:break-all;font-size:12px"></pre>
+          <button class="btn btn-ghost" style="font-size:12px;padding:0.25rem 0.75rem" onclick="copySnippet('lsl-snippet')">Copy LSL config</button>
+        </div>
+        <div class="callout callout-info" style="margin-top:0.75rem">
+          <strong>Lua script — paste at the top of <code>lua/agent_companion.lua</code></strong>
+          <pre id="lua-snippet" style="margin:0.75rem 0 0.5rem;white-space:pre-wrap;word-break:break-all;font-size:12px"></pre>
+          <button class="btn btn-ghost" style="font-size:12px;padding:0.25rem 0.75rem" onclick="copySnippet('lua-snippet')">Copy Lua config</button>
+        </div>
+      </div>
     </div>`;
 }
 
 function collectStep3() {
-  state.discord_enabled           = chk('f-discord-on');
-  state.discord_token             = val('f-discord-token') || state.discord_token;
-  state.discord_allowed_guild_ids = val('f-guild-ids');
+  state.discord_enabled            = chk('f-discord-on');
+  state.discord_token              = val('f-discord-token') || state.discord_token;
+  state.discord_allowed_guild_ids  = val('f-guild-ids');
   state.discord_active_channel_ids = val('f-channel-ids');
-  state.sl_enabled                = chk('f-sl-on');
-  state.sl_bridge_secret          = val('f-sl-secret') || state.sl_bridge_secret;
-  state.sl_bridge_port            = val('f-sl-port')   || state.sl_bridge_port;
-  state.opensim_enabled           = chk('f-opensim-on');
+  state.sl_enabled                 = chk('f-sl-on');
+  state.sl_bridge_url              = val('f-sl-url')    || state.sl_bridge_url;
+  state.sl_bridge_secret           = val('f-sl-secret') || state.sl_bridge_secret;
+  state.sl_bridge_port             = val('f-sl-port')   || state.sl_bridge_port;
+  state.sl_trigger_names           = [
+    val('f-trigger-0') || state.agent_name,
+    val('f-trigger-1'),
+    val('f-trigger-2'),
+  ];
+  state.opensim_enabled            = chk('f-opensim-on');
+}
+
+function updateScriptSnippet() {
+  const url     = document.getElementById('f-sl-url')?.value    || 'YOUR_TUNNEL_URL';
+  const secret  = document.getElementById('f-sl-secret')?.value || 'YOUR_BRIDGE_SECRET';
+  const t0      = document.getElementById('f-trigger-0')?.value || state.agent_name || 'AgentName';
+  const t1      = document.getElementById('f-trigger-1')?.value || '';
+  const t2      = document.getElementById('f-trigger-2')?.value || '';
+  const triggers = [t0, t1, t2].filter(Boolean).map(t => `"${t}"`).join(', ');
+
+  const lslEl = document.getElementById('lsl-snippet');
+  const luaEl = document.getElementById('lua-snippet');
+  if (lslEl) lslEl.textContent =
+    `string  SERVER_URL    = "${url}";\nstring  SECRET        = "${secret}";\nlist    TRIGGER_NAMES = [${triggers}];`;
+  if (luaEl) luaEl.textContent =
+    `local SERVER_URL = "${url}"\nlocal SECRET     = "${secret}"`;
+}
+
+function copySnippet(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(() => {
+    const btn = el.nextElementSibling;
+    if (btn) { const orig = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = orig, 1500); }
+  });
 }
 
 function toggleCard(checkbox, bodyId) {
@@ -802,7 +877,7 @@ const builders = {
   1: buildStep1, 2: buildStep2, 3: buildStep3,
   4: buildStep4, 5: buildStep5, 6: buildStep6, 7: buildStep7,
 };
-const binders = { 1: bindStep1 };
+const binders = { 1: bindStep1, 3: () => updateScriptSnippet() };
 const collectors = {
   1: collectStep1, 2: collectStep2, 3: collectStep3,
   4: collectStep4, 5: collectStep5, 6: collectStep6,
@@ -833,12 +908,15 @@ async function save() {
       DISCORD_TOKEN:               state.discord_token,
       DISCORD_ALLOWED_GUILD_IDS:   state.discord_allowed_guild_ids,
       DISCORD_ACTIVE_CHANNEL_IDS:  state.discord_active_channel_ids,
+      SL_BRIDGE_URL:               state.sl_bridge_url,
       SL_BRIDGE_SECRET:            state.sl_bridge_secret,
       SL_BRIDGE_PORT:              String(state.sl_bridge_port),
+      SL_TRIGGER_NAMES:            state.sl_trigger_names.filter(Boolean).join(','),
       OPENSIM_ENABLED:             state.opensim_enabled ? 'true' : 'false',
       SEARCH_PROVIDER:             state.search_provider,
       SEARCH_API_KEY:              state.search_api_key,
-      OWNER_NAME:                  state.owner_name,
+      OWNER_SL_NAME:               state.owner_sl_name,
+      OWNER_DISCORD_NAME:          state.owner_discord_name,
     },
     agent_config: {
       agent_name: state.agent_name,
