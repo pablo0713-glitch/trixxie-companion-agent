@@ -1,13 +1,13 @@
 // ================================================================
 // Trixxie — Friendly Companion Agent — Sensory HUD
 // ================================================================
-// Wear this HUD on Trixxie's avatar. Touch to open sensor controls.
+// Wear this HUD on your companion's avatar. Touch to open sensor controls.
 // Channel 42 conversations work as before.
 //
 // SETUP:
 //   1. Set SERVER_URL to your bridge's public URL
 //   2. Set SECRET to match SL_BRIDGE_SECRET in your .env (or leave empty)
-//   3. Attach to Trixxie as a HUD
+//   3. Copy script into an object, wear object, left-click object to interact.
 // ================================================================
 
 // --- Config ---
@@ -17,7 +17,7 @@ string  GRID           = "sl";      // "sl" for Second Life, "opensim" for OpenS
 integer LISTEN_CHANNEL = 42;
 integer UI_CHANNEL     = -7654321;  // private dialog channel
 integer CHAT_BUF_SIZE  = 10;        // ambient chat lines to buffer
-list    TRIGGER_NAMES  = ["Trixxie", "Trix", "Trixx"]; // names/aliases that trigger a local chat response
+list    TRIGGER_NAMES  = ["Primary", "Alias1", "Alias2"]; // names/aliases that trigger a local chat response
 
 // --- Sensor toggles ---
 integer s_avatars = TRUE;
@@ -453,7 +453,7 @@ show_menu()
 {
     string mode = "Str:" + (string)s_stream;
     llDialog(llGetOwner(),
-        "Trixxie Sensory HUD\nAv:" + (string)s_avatars
+        "Companion Agent Sensory HUD\nAv:" + (string)s_avatars
         + " Ch:" + (string)s_chat
         + " En:" + (string)s_env
         + " Ob:" + (string)s_objects
@@ -562,7 +562,7 @@ default
         do_avatar_scan();
         do_rlv_scan();
         do_object_scan();
-        llOwnerSay("Trixxie Sensory HUD active. Touch to open controls.");
+        llOwnerSay("Your companion agent's sensory HUD is active. Touch to open controls.");
     }
 
     touch_start(integer n)
