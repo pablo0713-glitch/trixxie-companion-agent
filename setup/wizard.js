@@ -582,11 +582,20 @@ function buildStep3() {
           <strong>LSL HUD — paste at the top of <code>lsl/companion_bridge.lsl</code></strong>
           <pre id="lsl-snippet" style="margin:0.75rem 0 0.5rem;white-space:pre-wrap;word-break:break-all;font-size:12px"></pre>
           <button class="btn btn-ghost" style="font-size:12px;padding:0.25rem 0.75rem" onclick="copySnippet('lsl-snippet')">Copy LSL config</button>
+          <p class="form-hint" style="margin-top:0.5rem">Only the script is provided — you must create an in-world object, drop <code>companion_bridge.lsl</code> into it, and wear the object as a HUD. Right-click the object → <strong>More → Attach HUD</strong> → choose a HUD position.</p>
         </div>
         <div class="callout callout-info" style="margin-top:0.75rem">
-          <strong>Lua script — paste at the top of <code>lua/agent_companion.lua</code></strong>
+          <strong>Lua script (Cool VL Viewer only) — paste at the top of <code>lua/agent_companion.lua</code></strong>
           <pre id="lua-snippet" style="margin:0.75rem 0 0.5rem;white-space:pre-wrap;word-break:break-all;font-size:12px"></pre>
           <button class="btn btn-ghost" style="font-size:12px;padding:0.25rem 0.75rem" onclick="copySnippet('lua-snippet')">Copy Lua config</button>
+          <p class="form-hint" style="margin-top:0.5rem">
+            Copy <code>lua/agent_companion.lua</code> to your Cool VL Viewer user settings folder and rename it <code>automation.lua</code>:<br>
+            <strong>Linux:</strong> <code>~/.secondlife/user_settings/automation.lua</code><br>
+            <strong>Windows:</strong> <code>%APPDATA%\SecondLife\user_settings\automation.lua</code><br>
+            <strong>macOS:</strong> <code>~/Library/Application Support/SecondLife/user_settings/automation.lua</code><br>
+            If <code>automation.lua</code> already exists, append the contents instead of replacing it.
+            Load or reload via <strong>Advanced → Lua Scripting → Load a Lua script</strong> in Cool VL Viewer (no viewer restart needed).
+          </p>
         </div>
       </div>
     </div>`;
