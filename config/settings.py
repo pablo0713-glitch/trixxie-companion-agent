@@ -10,16 +10,22 @@ load_dotenv()
 @dataclass
 class Settings:
     # Model provider
-    model_provider: str        # "anthropic" | "ollama"
+    # "anthropic" | "openai" | "openrouter" | "gemini" | "grok" | "ollama" | "lm_studio"
+    model_provider: str
 
     # Anthropic
     anthropic_api_key: str
     claude_model: str
     max_tokens: int
 
-    # Ollama
-    ollama_base_url: str
-    ollama_model: str
+    # OpenAI-compatible cloud providers (openai / openrouter / gemini / grok)
+    openai_api_key: str
+    openai_model: str
+
+    # Local / self-hosted OpenAI-compatible providers (ollama / lm_studio / custom)
+    openai_base_url: str       # overrides provider default when set
+    ollama_base_url: str       # kept for backward compat; used when provider == "ollama"
+    ollama_model: str          # kept for backward compat; used when provider == "ollama"
 
     # Discord
     discord_token: str
@@ -51,6 +57,9 @@ class Settings:
     owner_name: str
 
 
+_CLOUD_OPENAI_COMPAT = {"openai", "openrouter", "gemini", "grok"}
+
+
 def load_settings() -> Settings:
     model_provider = os.getenv("MODEL_PROVIDER", "anthropic").lower()
 
@@ -58,6 +67,11 @@ def load_settings() -> Settings:
         anthropic_api_key = _require("ANTHROPIC_API_KEY")
     else:
         anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+
+    if model_provider in _CLOUD_OPENAI_COMPAT:
+        openai_api_key = _require("OPENAI_API_KEY")
+    else:
+        openai_api_key = os.getenv("OPENAI_API_KEY", "")
 
     guild_ids_raw = os.getenv("DISCORD_ALLOWED_GUILD_IDS", "").strip()
     guild_ids = (
@@ -71,6 +85,9 @@ def load_settings() -> Settings:
         anthropic_api_key=anthropic_api_key,
         claude_model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6"),
         max_tokens=int(os.getenv("CLAUDE_MAX_TOKENS", "768")),
+        openai_api_key=openai_api_key,
+        openai_model=os.getenv("OPENAI_MODEL", ""),
+        openai_base_url=os.getenv("OPENAI_BASE_URL", ""),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
         ollama_model=os.getenv("OLLAMA_MODEL", "llama3.2"),
         discord_token=os.getenv("DISCORD_TOKEN", ""),

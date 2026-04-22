@@ -284,7 +284,7 @@ class SLProtocol(asyncio.DatagramProtocol):
             + b'\x00'                                    # Dialog (0 = plain IM)
             + _uuid_bytes("00000000-0000-0000-0000-000000000000")  # ID (session)
             + struct.pack(">I", timestamp)               # Timestamp
-            + b'Trixxie Carissa\x00'                     # FromAgentName (null-term)
+            + b'Agent Avatar\x00'                        # FromAgentName (null-term)
             + struct.pack(">H", len(msg_bytes))          # Message length
             + msg_bytes                                  # Message
             + struct.pack(">B", 0)                       # BinaryBucket length

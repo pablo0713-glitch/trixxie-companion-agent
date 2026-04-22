@@ -48,13 +48,15 @@ _SL_ACTION_TYPE_DESCRIPTIONS = {
         "'say' = speak in public local chat (channel 0), visible to everyone nearby. "
         "'im' = send a private instant message to the target avatar. "
         "'emote' = send *action text* as a private IM to the target avatar. "
-        "'anim_trigger' = play a named animation on your avatar."
+        "'anim_trigger' = play a named animation on your avatar. "
+        "'scan_outfit' = trigger an RLV outfit scan; results appear in the clothing sensor context on the next message (HUD path only)."
     ),
     "lua": (
         "'say' = speak in public local chat (channel 0), visible to everyone nearby. "
         "'im' = send a private instant message to the target avatar. "
         "'emote' = send *action text* as a private IM to the target avatar. "
         "'anim_trigger' = play a named animation on your avatar. "
+        "'scan_outfit' = trigger an RLV outfit scan; results appear in the clothing sensor context on the next message (HUD path only). "
         "'mute_avatar' = mute/block an avatar (text, voice, particles, sounds); set target_key to SL UUID, text to display name. "
         "'unmute_avatar' = remove a mute/block; set target_key to SL UUID, text to display name. "
         "'is_muted' = check whether an avatar is muted; set target_key to SL UUID — result is sent back as an IM."
@@ -62,8 +64,8 @@ _SL_ACTION_TYPE_DESCRIPTIONS = {
 }
 
 _SL_ACTION_ENUMS = {
-    "lsl": ["say", "im", "emote", "anim_trigger"],
-    "lua": ["say", "im", "emote", "anim_trigger", "mute_avatar", "unmute_avatar", "is_muted"],
+    "lsl": ["say", "im", "emote", "anim_trigger", "scan_outfit"],
+    "lua": ["say", "im", "emote", "anim_trigger", "scan_outfit", "mute_avatar", "unmute_avatar", "is_muted"],
 }
 
 
@@ -139,7 +141,7 @@ SESSION_QUERY_SCHEMA = {
     "description": (
         "Query your conversation history with structured filters. "
         "Use 'speakers' mode to answer questions like 'who did you talk to on April 18th?' or "
-        "'list everyone you've spoken with except StonedGrits'. "
+        "'list everyone you've spoken with this week'. "
         "Use 'turns' mode to retrieve recent messages from a specific person or date. "
         "All filters are optional and combinable."
     ),

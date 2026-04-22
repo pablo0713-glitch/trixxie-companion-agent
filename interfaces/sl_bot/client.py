@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 """
-Trixxie Carissa — Second Life Bot Avatar Client
+Trixxie — Friendly Companion Agent — Second Life Bot Avatar Client
 
-Connects Trixxie to SL as a real avatar using a pure-Python protocol
+Connects the agent to SL as a real avatar using a pure-Python protocol
 implementation (no third-party SL libraries required).
 
 SETUP:

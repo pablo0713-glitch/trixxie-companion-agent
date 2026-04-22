@@ -1,5 +1,5 @@
 -- ================================================================
--- Trixxie Carissa — Cool VL Viewer Automation Script
+-- Trixxie — Friendly Companion Agent — Cool VL Viewer Automation Script
 -- ================================================================
 -- Place this file at: <viewer>/user_settings/automation.lua
 --
@@ -11,8 +11,8 @@
 -- ================================================================
 
 -- --- Config ---
-local SERVER_URL    = "https://caught-cheese-doll-middle.trycloudflare.com"
-local SECRET        = "death1"
+local SERVER_URL    = "YOUR_TUNNEL_URL"
+local SECRET        = "YOUR_BRIDGE_SECRET"
 local GRID          = "sl"       -- "sl" or "opensim"
 local IM_CHUNK_SIZE = 1000       -- max chars per SendIM call
 

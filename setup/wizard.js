@@ -100,8 +100,14 @@ const state = {
   pa_sl:       D.platform_awareness.sl,
   pa_opensim:  D.platform_awareness.opensim,
   model_provider: 'anthropic',
+  // Anthropic
   anthropic_api_key: '',
   claude_model: 'claude-sonnet-4-6',
+  // OpenAI-compatible cloud (openai / openrouter / gemini / grok)
+  openai_api_key: '',
+  openai_model: '',
+  // Local / self-hosted (ollama / lm_studio)
+  openai_base_url: '',
   ollama_base_url: 'http://localhost:11434/v1',
   ollama_model: 'llama3.2',
   max_tokens: 768,
@@ -195,11 +201,14 @@ function applyConfig(config) {
   const env = config.env || {};
   const ag = config.agent_config || {};
 
-  if (env.MODEL_PROVIDER) state.model_provider = env.MODEL_PROVIDER;
+  if (env.MODEL_PROVIDER)    state.model_provider    = env.MODEL_PROVIDER;
   if (env.ANTHROPIC_API_KEY) state.anthropic_api_key = env.ANTHROPIC_API_KEY;
-  if (env.CLAUDE_MODEL) state.claude_model = env.CLAUDE_MODEL;
-  if (env.OLLAMA_BASE_URL) state.ollama_base_url = env.OLLAMA_BASE_URL;
-  if (env.OLLAMA_MODEL) state.ollama_model = env.OLLAMA_MODEL;
+  if (env.CLAUDE_MODEL)      state.claude_model      = env.CLAUDE_MODEL;
+  if (env.OPENAI_API_KEY)    state.openai_api_key    = env.OPENAI_API_KEY;
+  if (env.OPENAI_MODEL)      state.openai_model      = env.OPENAI_MODEL;
+  if (env.OPENAI_BASE_URL)   state.openai_base_url   = env.OPENAI_BASE_URL;
+  if (env.OLLAMA_BASE_URL)   state.ollama_base_url   = env.OLLAMA_BASE_URL;
+  if (env.OLLAMA_MODEL)      state.ollama_model      = env.OLLAMA_MODEL;
   if (env.CLAUDE_MAX_TOKENS) state.max_tokens = parseInt(env.CLAUDE_MAX_TOKENS, 10) || state.max_tokens;
 
   if (env.DISCORD_TOKEN) { state.discord_token = env.DISCORD_TOKEN; state.discord_enabled = true; }
@@ -324,33 +333,69 @@ function collectStep1() {
 // Step 2 — Model
 // ============================================================
 
+const PROVIDER_META = {
+  anthropic:  { label: 'Anthropic',     desc: 'Claude Sonnet · Opus · Haiku',      group: 'cloud' },
+  openai:     { label: 'OpenAI',         desc: 'GPT-4o · o1 · o3',                  group: 'cloud' },
+  gemini:     { label: 'Google Gemini',  desc: 'Gemini 2.0 Flash · Pro',            group: 'cloud' },
+  grok:       { label: 'Grok (xAI)',     desc: 'Grok 3 · Grok 3 Mini',              group: 'cloud' },
+  openrouter: { label: 'OpenRouter',     desc: '200+ models via one API key',        group: 'cloud' },
+  ollama:     { label: 'Ollama',         desc: 'Local · private · free',            group: 'local' },
+  lm_studio:  { label: 'LM Studio',      desc: 'Local GUI · private · free',        group: 'local' },
+};
+
+const PROVIDER_HINTS = {
+  openai:     { keyLabel: 'OpenAI API Key',     keyHint: 'platform.openai.com',      keyPh: 'sk-...',      modelPh: 'gpt-4o',                  modelHint: 'e.g. gpt-4o, gpt-4o-mini, o1, o3-mini' },
+  gemini:     { keyLabel: 'Gemini API Key',      keyHint: 'aistudio.google.com',      keyPh: 'AIza...',     modelPh: 'gemini-2.0-flash',         modelHint: 'e.g. gemini-2.0-flash, gemini-2.0-pro' },
+  grok:       { keyLabel: 'xAI API Key',         keyHint: 'console.x.ai',             keyPh: 'xai-...',     modelPh: 'grok-3',                   modelHint: 'e.g. grok-3, grok-3-mini' },
+  openrouter: { keyLabel: 'OpenRouter API Key',  keyHint: 'openrouter.ai/keys',       keyPh: 'sk-or-...',   modelPh: 'openai/gpt-4o',            modelHint: 'e.g. openai/gpt-4o, anthropic/claude-sonnet-4-5, meta-llama/llama-3.3-70b-instruct' },
+};
+
+function providerCard(id) {
+  const m = PROVIDER_META[id];
+  const active = state.model_provider === id;
+  return `<button class="tab ${active ? 'active' : ''}" style="flex:0 0 auto;min-width:10rem;text-align:left;padding:0.6rem 0.9rem;height:auto" onclick="setProvider('${id}')">
+    <div style="font-weight:600;font-size:0.9rem">${m.label}</div>
+    <div style="font-size:0.75rem;opacity:0.65;margin-top:0.15rem;white-space:normal">${m.desc}</div>
+  </button>`;
+}
+
 function buildStep2() {
-  const ollama = state.model_provider === 'ollama';
-  const models = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'];
-  return `
-    <h2 class="step-heading">AI Model</h2>
-    <p class="step-desc">Choose the model that powers your agent.</p>
-    <div class="provider-tabs">
-      <button class="tab ${!ollama ? 'active' : ''}" onclick="setProvider('anthropic')">Anthropic (Claude)</button>
-      <button class="tab ${ollama ? 'active' : ''}" onclick="setProvider('ollama')">Ollama (Local)</button>
-    </div>
-    <div id="anthropic-fields" style="display:${!ollama ? '' : 'none'}">
+  const p = state.model_provider;
+  const cloudProviders = ['anthropic', 'openai', 'gemini', 'grok', 'openrouter'];
+  const localProviders = ['ollama', 'lm_studio'];
+
+  const claudeModels = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'];
+
+  let providerFields = '';
+  if (p === 'anthropic') {
+    providerFields = `
       <div class="form-group">
-        <label for="f-api-key">API Key</label>
+        <label for="f-api-key">Anthropic API Key</label>
         <input type="password" id="f-api-key" class="form-input" value="${esc(state.anthropic_api_key)}" placeholder="sk-ant-...">
-        <p class="form-hint">Get your key at <code>console.anthropic.com</code></p>
+        <p class="form-hint">Get your key at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a></p>
       </div>
       <div class="form-group">
-        <label for="f-model">Model</label>
-        <select id="f-model" class="form-input form-select">
-          ${models.map(m => `<option value="${m}" ${state.claude_model === m ? 'selected' : ''}>${m}</option>`).join('')}
+        <label for="f-claude-model">Model</label>
+        <select id="f-claude-model" class="form-input form-select">
+          ${claudeModels.map(m => `<option value="${m}" ${state.claude_model === m ? 'selected' : ''}>${m}</option>`).join('')}
         </select>
+      </div>`;
+  } else if (PROVIDER_HINTS[p]) {
+    const h = PROVIDER_HINTS[p];
+    providerFields = `
+      <div class="form-group">
+        <label for="f-oai-key">${h.keyLabel}</label>
+        <input type="password" id="f-oai-key" class="form-input" value="${esc(state.openai_api_key)}" placeholder="${h.keyPh}">
+        <p class="form-hint">Get your key at <code>${h.keyHint}</code></p>
       </div>
-    </div>
-    <div id="ollama-fields" style="display:${ollama ? '' : 'none'}">
-      <div class="callout callout-info">
-        Ollama must be running before starting the agent. Tool use support varies by model.
-      </div>
+      <div class="form-group">
+        <label for="f-oai-model">Model</label>
+        <input type="text" id="f-oai-model" class="form-input" value="${esc(state.openai_model || h.modelPh)}" placeholder="${h.modelPh}">
+        <p class="form-hint">${h.modelHint}</p>
+      </div>`;
+  } else if (p === 'ollama') {
+    providerFields = `
+      <div class="callout callout-info">Ollama must be running before starting the agent. Tool use support varies by model.</div>
       <div class="form-group" style="margin-top:1rem">
         <label for="f-ollama-url">Base URL</label>
         <input type="text" id="f-ollama-url" class="form-input" value="${esc(state.ollama_base_url)}" placeholder="http://localhost:11434/v1">
@@ -359,20 +404,61 @@ function buildStep2() {
         <label for="f-ollama-model">Model Name</label>
         <input type="text" id="f-ollama-model" class="form-input" value="${esc(state.ollama_model)}" placeholder="llama3.2">
         <p class="form-hint">Any model pulled with <code>ollama pull &lt;model&gt;</code></p>
+      </div>`;
+  } else if (p === 'lm_studio') {
+    providerFields = `
+      <div class="callout callout-info">LM Studio must be running with the local server enabled. No API key required.</div>
+      <div class="form-group" style="margin-top:1rem">
+        <label for="f-lms-url">Base URL</label>
+        <input type="text" id="f-lms-url" class="form-input" value="${esc(state.openai_base_url || 'http://localhost:1234/v1')}" placeholder="http://localhost:1234/v1">
       </div>
+      <div class="form-group">
+        <label for="f-oai-model">Model Name</label>
+        <input type="text" id="f-oai-model" class="form-input" value="${esc(state.openai_model)}" placeholder="loaded model name from LM Studio">
+        <p class="form-hint">Copy the model identifier shown in LM Studio's local server tab.</p>
+      </div>`;
+  }
+
+  return `
+    <h2 class="step-heading">AI Model</h2>
+    <p class="step-desc">Choose the model that powers your agent.</p>
+
+    <div class="section-title" style="margin-bottom:0.6rem">Cloud Providers</div>
+    <div class="provider-tabs" style="flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem">
+      ${cloudProviders.map(providerCard).join('')}
     </div>
+
+    <div class="section-title" style="margin-bottom:0.6rem">Local / Self-hosted</div>
+    <div class="provider-tabs" style="flex-wrap:wrap;gap:0.5rem;margin-bottom:1.5rem">
+      ${localProviders.map(providerCard).join('')}
+    </div>
+
+    <div id="provider-fields">
+      ${providerFields}
+    </div>
+
     <div class="form-group" style="margin-top:1.5rem">
       <label for="f-max-tokens">Max Tokens per Reply</label>
       <input type="number" id="f-max-tokens" class="form-input" value="${esc(state.max_tokens)}" min="64" max="8192" step="64">
-      <p class="form-hint">Hard ceiling on model output length. Lower = faster + more concise. 512–768 is good for local models; 1024 for Claude.</p>
+      <p class="form-hint">Hard ceiling on model output length. 512–768 suits local models; 1024+ for Claude.</p>
     </div>`;
 }
 
 function collectStep2() {
-  state.anthropic_api_key = val('f-api-key') || state.anthropic_api_key;
-  state.claude_model      = val('f-model')   || state.claude_model;
-  state.ollama_base_url   = val('f-ollama-url')   || state.ollama_base_url;
-  state.ollama_model      = val('f-ollama-model')  || state.ollama_model;
+  const p = state.model_provider;
+  if (p === 'anthropic') {
+    state.anthropic_api_key = val('f-api-key')      || state.anthropic_api_key;
+    state.claude_model      = val('f-claude-model')  || state.claude_model;
+  } else if (PROVIDER_HINTS[p]) {
+    state.openai_api_key = val('f-oai-key')   || state.openai_api_key;
+    state.openai_model   = val('f-oai-model') || state.openai_model;
+  } else if (p === 'ollama') {
+    state.ollama_base_url = val('f-ollama-url')   || state.ollama_base_url;
+    state.ollama_model    = val('f-ollama-model')  || state.ollama_model;
+  } else if (p === 'lm_studio') {
+    state.openai_base_url = val('f-lms-url')   || state.openai_base_url;
+    state.openai_model    = val('f-oai-model') || state.openai_model;
+  }
   const mt = parseInt(val('f-max-tokens'), 10);
   if (mt > 0) state.max_tokens = mt;
 }
@@ -658,9 +744,14 @@ function collectStep6() {
 // ============================================================
 
 function buildStep7() {
-  const modelLabel = state.model_provider === 'ollama'
-    ? `Ollama — ${state.ollama_model}`
-    : state.claude_model;
+  const modelLabel = (() => {
+    const p = state.model_provider;
+    if (p === 'anthropic')  return state.claude_model;
+    if (p === 'ollama')     return `Ollama — ${state.ollama_model}`;
+    if (p === 'lm_studio')  return `LM Studio — ${state.openai_model}`;
+    const names = { openai: 'OpenAI', openrouter: 'OpenRouter', gemini: 'Gemini', grok: 'Grok' };
+    return `${names[p] || p} — ${state.openai_model}`;
+  })();
 
   const platforms = [];
   if (state.discord_enabled) platforms.push('<span class="badge">Discord</span>');
@@ -733,6 +824,9 @@ async function save() {
       MODEL_PROVIDER:              state.model_provider,
       ANTHROPIC_API_KEY:           state.anthropic_api_key,
       CLAUDE_MODEL:                state.claude_model,
+      OPENAI_API_KEY:              state.openai_api_key,
+      OPENAI_MODEL:                state.openai_model,
+      OPENAI_BASE_URL:             state.openai_base_url,
       OLLAMA_BASE_URL:             state.ollama_base_url,
       OLLAMA_MODEL:                state.ollama_model,
       CLAUDE_MAX_TOKENS:           String(state.max_tokens),

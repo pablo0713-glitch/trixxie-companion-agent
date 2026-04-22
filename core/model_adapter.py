@@ -113,15 +113,16 @@ class AnthropicAdapter(ModelAdapter):
         return response.content[0].text if response.content else ""
 
 
-# ------------------------------------------------------------------ Ollama adapter
+# ------------------------------------------------------------------ OpenAI-compatible adapter
+# Handles: OpenAI, OpenRouter, Google Gemini (compat endpoint), Grok (xAI),
+#          LM Studio, Ollama — any provider with an OpenAI-compatible /v1 API.
 
-class OllamaAdapter(ModelAdapter):
-    def __init__(self, base_url: str, model: str) -> None:
+class OpenAICompatibleAdapter(ModelAdapter):
+    def __init__(self, base_url: str, model: str, api_key: str = "openai") -> None:
         if not _OPENAI_AVAILABLE:
-            raise ImportError("openai package required for Ollama support: pip install openai")
-        self._base_url = base_url.rstrip("/")
+            raise ImportError("openai package required: pip install openai")
         self._model = model
-        self._client = _AsyncOpenAI(base_url=f"{self._base_url}/v1", api_key="ollama")
+        self._client = _AsyncOpenAI(base_url=base_url.rstrip("/"), api_key=api_key)
 
     async def create(self, *, system, messages, tools, tool_choice, max_tokens) -> ModelResponse:
         oai_messages = _to_openai_messages(_flatten_system_blocks(system), messages)
@@ -277,14 +278,43 @@ def _to_openai_tools(tools: list[dict]) -> list[dict]:
     ]
 
 
+# ------------------------------------------------------------------ provider base URLs
+
+_OPENAI_COMPAT_URLS: dict[str, str] = {
+    "openai":     "https://api.openai.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "gemini":     "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "grok":       "https://api.x.ai/v1",
+}
+
+_LOCAL_PROVIDER_DEFAULTS: dict[str, str] = {
+    "ollama":    "http://localhost:11434/v1",
+    "lm_studio": "http://localhost:1234/v1",
+}
+
+
 # ------------------------------------------------------------------ factory
 
 def create_adapter(settings: Any) -> ModelAdapter:
-    if settings.model_provider == "ollama":
-        return OllamaAdapter(
-            base_url=settings.ollama_base_url,
-            model=settings.ollama_model,
+    provider = settings.model_provider
+
+    if provider in _OPENAI_COMPAT_URLS:
+        return OpenAICompatibleAdapter(
+            base_url=_OPENAI_COMPAT_URLS[provider],
+            model=settings.openai_model,
+            api_key=settings.openai_api_key or "no-key",
         )
+
+    if provider in _LOCAL_PROVIDER_DEFAULTS:
+        base_url = settings.openai_base_url or _LOCAL_PROVIDER_DEFAULTS[provider]
+        model = settings.ollama_model if provider == "ollama" else settings.openai_model
+        return OpenAICompatibleAdapter(
+            base_url=base_url,
+            model=model,
+            api_key="no-key",
+        )
+
+    # Default: Anthropic
     import anthropic
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     return AnthropicAdapter(client=client, model=settings.claude_model)

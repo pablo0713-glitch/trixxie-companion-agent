@@ -1,14 +1,15 @@
 .env
 .venv/
+venv/
 data/memory/
 data/notes/
 data/agent_config.json
 data/identity/
+data/person_map.json
+summary-phase*.md
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
-.venv/
-venv/
 dist/
 *.egg-info/

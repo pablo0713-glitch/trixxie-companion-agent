@@ -1,4 +1,4 @@
-# Trixxie Carissa — Companion Agent
+# Trixxie — Friendly Companion Agent
 
 AI companion powered by Claude (claude-sonnet-4-6), running simultaneously on Discord and Second Life via a shared AgentCore. This is a personal project turned into a general-purpose framework.
 

@@ -430,10 +430,15 @@ def _format_sensor_context(ctx: dict) -> str:
 
     clothing = ctx.get("clothing")
     if clothing:
-        items = clothing.get("items", [])
-        if items:
-            item_str = ", ".join(f"{i.get('item', '?')} by {i.get('creator', '?')}" for i in items)
-            lines.append(f"Scan of {clothing.get('target', '?')}{_age_label(ages, 'clothing')}: {item_str}")
+        parts = []
+        attach = clothing.get("attachments", "").strip()
+        layers = clothing.get("layers", "").strip()
+        if attach:
+            parts.append(f"Attachments: {attach}")
+        if layers:
+            parts.append(f"System layers: {layers}")
+        if parts:
+            lines.append(f"Trixxie's outfit{_age_label(ages, 'clothing')}: {' | '.join(parts)}")
 
     rlv = ctx.get("rlv")
     if rlv:

@@ -1,6 +1,5 @@
 // ================================================================
-// Trixxie Carissa — Sensory Companion HUD
-// Phase 2 — Environmental Awareness
+// Trixxie — Friendly Companion Agent — Sensory HUD
 // ================================================================
 // Wear this HUD on Trixxie's avatar. Touch to open sensor controls.
 // Channel 42 conversations work as before.
@@ -12,8 +11,8 @@
 // ================================================================
 
 // --- Config ---
-string  SERVER_URL     = "https://caught-cheese-doll-middle.trycloudflare.com";
-string  SECRET         = "death1";
+string  SERVER_URL     = "YOUR_TUNNEL_URL";
+string  SECRET         = "YOUR_BRIDGE_SECRET";
 string  GRID           = "sl";      // "sl" for Second Life, "opensim" for OpenSimulator
 integer LISTEN_CHANNEL = 42;
 integer UI_CHANNEL     = -7654321;  // private dialog channel
@@ -65,12 +64,17 @@ key sk_rlv = NULL_KEY;
 // --- Ambient chat buffer (sent as context with /42 messages) ---
 list nearby_chat = [];
 
-// --- Clothing scan state machine ---
-// 0=idle  1=find-agent (AGENT sweep)  2=find-attachments (PASSIVE|ACTIVE sweep)
-// 3=object proximity  4=RLV sitting-object resolution
-integer scan_mode  = 0;
-key     clo_target = NULL_KEY;
-string  clo_name   = "";
+// --- Object / RLV scan state machine (clothing scan removed — replaced by RLV commands) ---
+// 0=idle  3=object proximity  4=RLV sitting-object resolution
+integer scan_mode = 0;
+
+// --- RLV outfit scan ---
+integer RLV_CHAN         = 9876543;   // @getattach response channel (also used for @version handshake)
+integer RLV_CHAN2        = 9876544;   // @getoutfit response channel
+integer rlv_ready        = FALSE;     // TRUE after @version handshake succeeds
+integer rlv_scanning     = FALSE;     // TRUE while waiting for @getattach / @getoutfit responses
+string  rlv_attach_raw   = "";        // raw @getattach 0/1 string
+string  rlv_outfit_raw   = "";        // raw @getoutfit 0/1 string
 
 // --- RLV state (persisted across async sitting-object resolution) ---
 integer rlv_sitting    = FALSE;
@@ -84,6 +88,48 @@ vector  last_rlv_pos   = ZERO_VECTOR;
 // ================================================================
 // Helpers
 // ================================================================
+
+// RLV attachment point names — position i maps to SL attachment point (i+1).
+// Used to decode the @getattach 0/1 string into human-readable slot names.
+list ATTACH_NAMES = [
+    "Chest","Skull","L Shoulder","R Shoulder","L Hand","R Hand",
+    "L Foot","R Foot","Spine","Pelvis","Mouth","Chin","L Ear","R Ear",
+    "L Eye","R Eye","Nose","R Upper Arm","R Forearm","L Upper Arm",
+    "L Forearm","R Hip","R Upper Leg","R Lower Leg","L Hip",
+    "L Upper Leg","L Lower Leg","Stomach","L Pec","R Pec",
+    "HUD Ctr2","HUD Top-R","HUD Top","HUD Top-L","HUD Ctr",
+    "HUD Bot-L","HUD Bot","HUD Bot-R","Av Center"
+];
+
+// RLV outfit layer names — position i maps to wearable type i.
+// Empty strings mark reserved/unused slots.
+list LAYER_NAMES = [
+    "shape","skin","","hair","eyes","shirt","pants","shoes",
+    "socks","jacket","gloves","undershirt","underpants","skirt","",
+    "tattoo","","","alpha","physics","universal"
+];
+
+// Decode a RLV 0/1 bit-string into a CSV of occupied names from a name list.
+string decode_bits(string raw, list names)
+{
+    string result = "";
+    integer i;
+    integer len  = llStringLength(raw);
+    integer nmax = llGetListLength(names);
+    for (i = 0; i < len && i < nmax; i++)
+    {
+        if (llGetSubString(raw, i, i) == "1")
+        {
+            string n = llList2String(names, i);
+            if (n != "")
+            {
+                if (result != "") result += ", ";
+                result += n;
+            }
+        }
+    }
+    return result;
+}
 
 // Escape a string for embedding inside a JSON "..." value
 string json_s(string s)
@@ -367,14 +413,35 @@ post_rlv_data(string sitting_on)
 
 
 // ================================================================
-// Sensor: Clothing Scanner (two-step: find agent, then attachments)
+// Outfit Scanner — RLV commands (@getattach / @getoutfit)
+// Sends two sequential RLV commands on RLV_CHAN, collects both
+// responses via the listen() handler, then POSTs to /sl/sensor.
+// Requires RLV enabled in the viewer.
 // ================================================================
 
-do_clothing_scan()
+do_outfit_scan()
 {
-    scan_mode = 1;
-    llOwnerSay("Scanning for nearest avatar...");
-    llSensor("", NULL_KEY, AGENT, 30.0, PI);
+    if (!rlv_ready) { llOwnerSay("RLV not ready yet — try again in a moment."); return; }
+    if (rlv_scanning)
+        llOwnerSay("Restarting outfit scan...");
+    rlv_scanning   = TRUE;
+    rlv_attach_raw = "";
+    rlv_outfit_raw = "";
+    llOwnerSay("@getattach=" + (string)RLV_CHAN);
+    llOwnerSay("@getoutfit=" + (string)RLV_CHAN2);
+}
+
+post_outfit_data()
+{
+    string attach_csv = decode_bits(rlv_attach_raw, ATTACH_NAMES);
+    string layers_csv = decode_bits(rlv_outfit_raw, LAYER_NAMES);
+    string data = "{\"attachments\":\"" + json_s(attach_csv)
+               + "\",\"layers\":\"" + json_s(layers_csv) + "\"}";
+    sk_clo = sensor_post("clothing", data);
+    llOwnerSay("Outfit scan sent — attachments: " + attach_csv);
+    rlv_scanning   = FALSE;
+    rlv_attach_raw = "";
+    rlv_outfit_raw = "";
 }
 
 
@@ -394,7 +461,7 @@ show_menu()
         + " Vo:" + (string)s_voice
         + " " + mode,
         ["Avatars", "Chat", "Environment", "Objects",
-         "RLV", "Voice", "Streaming", "Scan Target", "Status", "Close"],
+         "RLV", "Voice", "Streaming", "My Outfit", "Status", "Close"],
         UI_CHANNEL);
 }
 
@@ -420,45 +487,6 @@ show_status()
 // Sensor result processors (called from sensor() event)
 // llDetected* are valid in user functions called within sensor()
 // ================================================================
-
-process_clothing_hits(integer num)
-{
-    integer idx;
-    integer att_count;
-    key     obj;
-    list    det;
-    integer apt;
-    key     own;
-    string  iname;
-    string  creator;
-    string  post_data;
-
-    att_count = 0;
-    post_data = "{\"target\":\"" + json_s(clo_name) + "\",\"items\":[";
-    for (idx = 0; idx < num; idx++)
-    {
-        obj = llDetectedKey(idx);
-        det = llGetObjectDetails(obj,
-            [OBJECT_ATTACHED_POINT, OBJECT_OWNER, OBJECT_NAME, OBJECT_CREATOR]);
-        apt = llList2Integer(det, 0);
-        own = llList2Key(det, 1);
-        if (apt > 0 && own == clo_target)
-        {
-            iname   = llList2String(det, 2);
-            creator = llKey2Name(llList2Key(det, 3));
-            if (att_count > 0) post_data += ",";
-            post_data += "{\"item\":\"" + json_s(iname)
-                       + "\",\"creator\":\"" + json_s(creator) + "\"}";
-            att_count++;
-        }
-    }
-    post_data += "]}";
-    sk_clo = sensor_post("clothing", post_data);
-    llOwnerSay("Scan sent: " + clo_name
-        + " — " + (string)att_count + " attachment(s) found.");
-    clo_target = NULL_KEY;
-    clo_name   = "";
-}
 
 process_object_hits(integer num)
 {
@@ -521,7 +549,11 @@ default
         llListen(LISTEN_CHANNEL, "", NULL_KEY, "");
         llListen(0, "", NULL_KEY, "");
         llListen(UI_CHANNEL, "", llGetOwner(), "");
-        llSetTimerEvent(TICK_SECS);
+        llListen(RLV_CHAN,  "", NULL_KEY, "");
+        llListen(RLV_CHAN2, "", NULL_KEY, "");
+        rlv_ready    = FALSE;
+        rlv_scanning = FALSE;
+        llSetTimerEvent(3.0);   // startup delay — RLV handshake fires on first tick
 
         last_region  = llGetRegionName();
         last_parcel  = llList2String(llGetParcelDetails(llGetPos(), [PARCEL_DETAILS_NAME]), 0);
@@ -541,6 +573,15 @@ default
 
     timer()
     {
+        // First fire after attach: send RLV version handshake, then switch to normal interval
+        if (!rlv_ready)
+        {
+            llOwnerSay("@version=" + (string)RLV_CHAN);
+            llSetTimerEvent(TICK_SECS);
+            tick = 0;
+            return;
+        }
+
         tick++;
 
         // Region change → re-scan everything, reset tick counter
@@ -588,6 +629,32 @@ default
 
     listen(integer channel, string name, key id, string message)
     {
+        // ── RLV responses ──
+        if (channel == RLV_CHAN)
+        {
+            if (!rlv_ready)
+            {
+                rlv_ready = TRUE;
+                llOwnerSay("RLV ready: " + llGetSubString(message, 0, 50));
+                return;
+            }
+            if (rlv_scanning)
+            {
+                rlv_attach_raw = message;
+                if (rlv_outfit_raw != "") post_outfit_data();
+            }
+            return;
+        }
+        if (channel == RLV_CHAN2)
+        {
+            if (rlv_scanning)
+            {
+                rlv_outfit_raw = message;
+                if (rlv_attach_raw != "") post_outfit_data();
+            }
+            return;
+        }
+
         // ── Local chat: buffer + name-trigger response ──
         if (channel == 0)
         {
@@ -642,7 +709,7 @@ default
             else if (message == "RLV")         { s_rlv     = !s_rlv;     show_menu(); }
             else if (message == "Voice")       { s_voice   = !s_voice;   show_menu(); }
             else if (message == "Streaming")   { s_stream  = !s_stream;  show_menu(); }
-            else if (message == "Scan Target") { do_clothing_scan(); }
+            else if (message == "My Outfit")   { do_outfit_scan(); }
             else if (message == "Status")      { show_status(); }
             else if (message == "Close")       { }
             return;
@@ -695,34 +762,6 @@ default
     // ── LSL sensor results ──
     sensor(integer num)
     {
-        // Step 1: Clothing scan — find nearest non-owner agent.
-        // llSensor results are sorted nearest-first, so index 0 is closest.
-        if (scan_mode == 1)
-        {
-            scan_mode = 0;
-            if (num > 0 && llDetectedKey(0) != llGetOwner())
-            {
-                clo_target = llDetectedKey(0);
-                clo_name   = llDetectedName(0);
-                llOwnerSay("Found: " + clo_name + ". Scanning attachments...");
-                scan_mode = 2;
-                llSensor("", NULL_KEY, PASSIVE | ACTIVE, 30.0, PI);
-            }
-            else
-            {
-                llOwnerSay("No nearby avatars found to scan.");
-            }
-            return;
-        }
-
-        // Step 2: Clothing scan — collect attachments owned by clo_target
-        if (scan_mode == 2)
-        {
-            scan_mode = 0;
-            process_clothing_hits(num);
-            return;
-        }
-
         // Object proximity scan
         if (scan_mode == 3)
         {
@@ -743,13 +782,9 @@ default
 
     no_sensor()
     {
-        if (scan_mode == 1 || scan_mode == 2)
-            llOwnerSay("Nothing detected in range.");
         if (scan_mode == 4)
             post_rlv_data("");   // sitting but nothing in 2m — post without object name
-        scan_mode  = 0;
-        clo_target = NULL_KEY;
-        clo_name   = "";
+        scan_mode = 0;
     }
 
     // ── Async data callbacks ──
@@ -804,6 +839,8 @@ default
                                 atext = "*" + atext + "*";
                             say_chunked(atext);
                         }
+                        else if (atype == "scan_outfit")
+                            do_outfit_scan();
                         idx++;
                     }
                 }
@@ -843,6 +880,8 @@ default
                     text = "*" + text + "*";
                 llInstantMessage(sender, text);
             }
+            else if (atype == "scan_outfit")
+                do_outfit_scan();
             idx++;
         }
     }

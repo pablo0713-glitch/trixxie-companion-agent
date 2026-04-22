@@ -1,4 +1,4 @@
-# Architecture — Trixxie Carissa
+# Trixxie — Friendly Companion Agent — Architecture
 
 ## Overview
 
@@ -226,7 +226,7 @@ lsl/
                                           avatars including the owner.
 
 lua/
-  trixxie_companion.lua                   Cool VL Viewer automation script.
+  agent_companion.lua                   Cool VL Viewer automation script.
                                           Copy to user_settings/automation.lua.
                                           OnInstantMsg → PostHTTP → OnHTTPReply → SendIM.
                                           SetAgentTyping wraps inference for typing indicator.
@@ -360,11 +360,11 @@ MEMORY (agent's notes) [42% — 840/2,000 chars]
 §
 User prefers short replies in-world.
 §
-StonedGrits owns the Nakano sim.
+YourAvatar owns the Nakano sim.
 
 USER (owner profile) [61% — 732/1,200 chars]
 §
-Pablo, goes by StonedGrits in SL. Builder and sim owner.
+Alex, goes by YourAvatar in SL. Builder and sim owner.
 §
 Prefers direct tone; dislikes over-explaining.
 ```
@@ -513,7 +513,7 @@ The platform awareness block tells the agent what it can perceive, what it canno
 ### Via LSL HUD (channel 42)
 
 ```
-StonedGrits types: /42 hey what do you think of this sim?
+YourAvatar types: /42 hey what do you think of this sim?
         │
         ▼
 Trixxie's HUD (LSL, channel 42 listener)
@@ -535,15 +535,15 @@ FastAPI returns JSON: { "reply": "...", "actions": [...] }
         │
         ▼
 LSL HUD receives http_response
-        │  llInstantMessage(StonedGrits_key, reply)
+        │  llInstantMessage(YourAvatar_key, reply)
         ▼
-Private IM arrives in StonedGrits' chat window
+Private IM arrives in YourAvatar' chat window
 ```
 
 ### Via Cool VL Viewer Lua (direct IM)
 
 ```
-StonedGrits sends a private IM to Trixxie's avatar
+YourAvatar sends a private IM to Trixxie's avatar
         │
         ▼
 automation.lua — OnInstantMsg(session_id, origin_id, type=0, ...)
@@ -568,7 +568,7 @@ automation.lua — OnHTTPReply(handle, success, reply)
         │  SetAgentTyping(false)  ← typing indicator clears
         │  SendIM(session_id, chunk) × N
         ▼
-Reply arrives in StonedGrits' IM window — no /42 required
+Reply arrives in YourAvatar' IM window — no /42 required
 ```
 
 Sensor data travels a separate path in both cases — the HUD POSTs to `/sl/sensor` on independent timers and on location changes. The `/sl/message` endpoint calls `SensorStore.get_changes()` which returns only sensor types updated since that user's last message. Chat is no longer piggybacked on `/42` or IM payloads — it is flushed via `do_chat_flush()` to `/sl/sensor` every 90 seconds and immediately before each `/42` POST.

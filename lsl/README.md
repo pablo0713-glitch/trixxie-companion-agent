@@ -1,4 +1,4 @@
-# Trixxie Carissa — Sensory Companion HUD
+# Trixxie — Friendly Companion Agent — Sensory HUD
 
 An LSL HUD script for Second Life that gives Trixxie continuous environmental awareness by streaming sensor data to an external AI bridge server. Trixxie can see who is nearby, what is being said around her, what the environment looks like, and what objects and attachments are present — all in real time.
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from core.persona import MessageContext
 
-VALID_ACTION_TYPES = {"say", "im", "emote", "anim_trigger", "mute_avatar", "unmute_avatar", "is_muted"}
+VALID_ACTION_TYPES = {"say", "im", "emote", "anim_trigger", "scan_outfit", "mute_avatar", "unmute_avatar", "is_muted"}
 
 _MUTE_VERBS = {"mute_avatar": "Muted", "unmute_avatar": "Unmuted", "is_muted": "Checking mute status for"}
 
@@ -24,6 +24,10 @@ async def handle_sl_action(
         return f"Unknown action type '{action_type}'. Valid types: {', '.join(sorted(VALID_ACTION_TYPES))}"
 
     is_mute_type = action_type in _MUTE_VERBS
+
+    if action_type == "scan_outfit":
+        action_queue.append({"action_type": "scan_outfit"})
+        return "Outfit scan triggered. Results will appear in the clothing sensor context on your next message."
 
     if not text and not is_mute_type:
         return "No text provided for action."
