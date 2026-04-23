@@ -45,6 +45,65 @@ class _ScriptUpdateBody(BaseModel):
     opensim: bool = False
 
 
+def _patch_scripts(url: str, secret: str, grid: str, triggers: list[str]) -> dict[str, str]:
+    """Patch SERVER_URL / SECRET / GRID / TRIGGER_NAMES into the LSL and Lua scripts."""
+    lsl_path = _ROOT / "lsl" / "companion_bridge.lsl"
+    lua_path = _ROOT / "lua" / "agent_companion.lua"
+    triggers_lsl = ", ".join(f'"{t}"' for t in triggers if t)
+    results: dict[str, str] = {}
+
+    def _sub(pattern: str, value: str, text: str) -> str:
+        return re.sub(pattern, lambda m: m.group(1) + value + m.group(2), text)
+
+    if lsl_path.exists():
+        try:
+            text = lsl_path.read_text(encoding="utf-8")
+            text = _sub(r'(string\s+SERVER_URL\s*=\s*")[^"]*(")', url, text)
+            text = _sub(r'(string\s+SECRET\s*=\s*")[^"]*(")', secret, text)
+            text = _sub(r'(string\s+GRID\s*=\s*")[^"]*(")', grid, text)
+            text = re.sub(
+                r'(list\s+TRIGGER_NAMES\s*=\s*\[)[^\]]*(\])',
+                lambda m: m.group(1) + triggers_lsl + m.group(2),
+                text,
+            )
+            lsl_path.write_text(text, encoding="utf-8")
+            results["lsl"] = "ok"
+        except Exception as exc:
+            results["lsl"] = str(exc)
+    else:
+        results["lsl"] = "not found"
+
+    if lua_path.exists():
+        try:
+            text = lua_path.read_text(encoding="utf-8")
+            text = _sub(r'(local\s+SERVER_URL\s*=\s*")[^"]*(")', url, text)
+            text = _sub(r'(local\s+SECRET\s*=\s*")[^"]*(")', secret, text)
+            text = _sub(r'(local\s+GRID\s*=\s*")[^"]*(")', grid, text)
+            lua_path.write_text(text, encoding="utf-8")
+            results["lua"] = "ok"
+        except Exception as exc:
+            results["lua"] = str(exc)
+    else:
+        results["lua"] = "not found"
+
+    return results
+
+
+def patch_scripts_from_env() -> None:
+    """Read SL config from .env and patch both scripts. Called on every startup."""
+    env = _read_dotenv()
+    url = env.get("SL_BRIDGE_URL", "")
+    if not url:
+        return  # SL not configured — nothing to patch
+    secret = env.get("SL_BRIDGE_SECRET", "")
+    opensim = env.get("OPENSIM_ENABLED", "false").lower() == "true"
+    grid = "opensim" if opensim else "sl"
+    triggers_raw = env.get("SL_TRIGGER_NAMES", "")
+    triggers = [t.strip() for t in triggers_raw.split(",") if t.strip()]
+    results = _patch_scripts(url, secret, grid, triggers)
+    logger.info("Script patch on startup: %s", results)
+
+
 def create_setup_router() -> APIRouter:
     router = APIRouter()
 
@@ -136,46 +195,8 @@ def create_setup_router() -> APIRouter:
 
     @router.post("/setup/update-scripts")
     async def update_scripts(body: _ScriptUpdateBody) -> JSONResponse:
-        lsl_path = _ROOT / "lsl" / "companion_bridge.lsl"
-        lua_path = _ROOT / "lua" / "agent_companion.lua"
         grid = "opensim" if body.opensim else "sl"
-        triggers_lsl = ", ".join(f'"{t}"' for t in body.triggers if t)
-        results: dict[str, str] = {}
-
-        def _sub_str(pattern: str, value: str, text: str) -> str:
-            return re.sub(pattern, lambda m: m.group(1) + value + m.group(2), text)
-
-        if lsl_path.exists():
-            try:
-                text = lsl_path.read_text(encoding="utf-8")
-                text = _sub_str(r'(string\s+SERVER_URL\s*=\s*")[^"]*(")', body.url, text)
-                text = _sub_str(r'(string\s+SECRET\s*=\s*")[^"]*(")', body.secret, text)
-                text = _sub_str(r'(string\s+GRID\s*=\s*")[^"]*(")', grid, text)
-                text = re.sub(
-                    r'(list\s+TRIGGER_NAMES\s*=\s*\[)[^\]]*(\])',
-                    lambda m: m.group(1) + triggers_lsl + m.group(2),
-                    text,
-                )
-                lsl_path.write_text(text, encoding="utf-8")
-                results["lsl"] = "ok"
-            except Exception as exc:
-                results["lsl"] = str(exc)
-        else:
-            results["lsl"] = "not found"
-
-        if lua_path.exists():
-            try:
-                text = lua_path.read_text(encoding="utf-8")
-                text = _sub_str(r'(local\s+SERVER_URL\s*=\s*")[^"]*(")', body.url, text)
-                text = _sub_str(r'(local\s+SECRET\s*=\s*")[^"]*(")', body.secret, text)
-                text = _sub_str(r'(local\s+GRID\s*=\s*")[^"]*(")', grid, text)
-                lua_path.write_text(text, encoding="utf-8")
-                results["lua"] = "ok"
-            except Exception as exc:
-                results["lua"] = str(exc)
-        else:
-            results["lua"] = "not found"
-
+        results = _patch_scripts(body.url, body.secret, grid, body.triggers)
         ok = all(v == "ok" for v in results.values())
         return JSONResponse({"ok": ok, "results": results})
 
