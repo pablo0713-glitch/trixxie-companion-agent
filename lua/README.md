@@ -23,52 +23,21 @@ This script must be installed on **the agent's viewer** (the viewer logged in as
 
 `lua/agent_companion.lua` is generated automatically by `./run.sh` with your credentials already filled in from `.env`. You do not need to edit it manually.
 
-There are two ways to load it into Cool VL Viewer:
+**Option 1 — Point Cool VL Viewer directly at the file (recommended)**
 
----
+Cool VL Viewer has a built-in file selector for the automation script. Use it to select `lua/agent_companion.lua` from your companion-agent install folder. The viewer saves that path and loads the file from it every time. When the script is updated by `./run.sh`, reload it instantly with **Advanced → Lua scripting → Re-load current automation script** — nothing else to do.
 
-### Option 1 — Symlink (recommended)
-
-Create a symlink from Cool VL Viewer's default automation script location to the generated file in your companion-agent folder. The viewer loads the script from its usual path, but it actually reads the one in your repo. When the script is updated by `./run.sh`, you can reload it instantly from **Advanced → Lua scripting → Re-load current automation script** — no file copying needed.
-
-**Linux:**
-```bash
-ln -sf /path/to/trixxie-companion-agent/lua/agent_companion.lua \
-    ~/.secondlife/user_settings/automation.lua
-```
-
-**Windows** (run as Administrator):
-```cmd
-mklink "%APPDATA%\SecondLife\user_settings\automation.lua" "C:\path\to\trixxie-companion-agent\lua\agent_companion.lua"
-```
-
-**macOS:**
-```bash
-ln -sf /path/to/trixxie-companion-agent/lua/agent_companion.lua \
-    ~/Library/Application\ Support/SecondLife/user_settings/automation.lua
-```
-
-> Replace `/path/to/trixxie-companion-agent` with the actual path to your install (e.g. `/home/yourname/trixxie-companion-agent`).
-
----
-
-### Option 2 — Copy the file
+**Option 2 — Copy the file**
 
 Copy `lua/agent_companion.lua` to the Cool VL Viewer user settings folder and rename it `automation.lua`:
 
-| OS | Destination |
+| OS | Path |
 |---|---|
 | Linux | `~/.secondlife/user_settings/automation.lua` |
 | Windows | `&#37;APPDATA&#37;\SecondLife\user_settings\automation.lua` |
 | macOS | `~/Library/Application Support/SecondLife/user_settings/automation.lua` |
 
 You will need to re-copy the file any time the script is updated by `./run.sh`.
-
-> If `automation.lua` already exists at that path, replace it entirely rather than merging — the companion script is self-contained.
-
----
-
-After either option, reload or restart Cool VL Viewer.
 
 ---
 
