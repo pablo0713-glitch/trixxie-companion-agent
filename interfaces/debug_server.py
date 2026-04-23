@@ -3,16 +3,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+import aiosqlite
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 if TYPE_CHECKING:
     from core.agent import AgentCore
     from interfaces.sl_bridge.sensor_store import SensorStore
+    from memory.session_index import SessionIndex
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +70,7 @@ def install_log_handler(loop: asyncio.AbstractEventLoop) -> SSELogHandler:
 
 # ------------------------------------------------------------------ router
 
-def create_debug_router(sensor_store: "SensorStore", agent_core: "AgentCore") -> APIRouter:
+def create_debug_router(sensor_store: "SensorStore", agent_core: "AgentCore", session_index: "SessionIndex | None" = None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/debug", response_class=HTMLResponse)
@@ -145,6 +149,60 @@ def create_debug_router(sensor_store: "SensorStore", agent_core: "AgentCore") ->
             }
         return JSONResponse(result)
 
+    @router.delete("/debug/reset-memory")
+    async def reset_memory() -> JSONResponse:
+        settings = agent_core._settings
+        memory_dir = Path(settings.memory_dir)
+        notes_dir  = Path(settings.notes_dir)
+        deleted: list[str] = []
+        errors:  list[str] = []
+
+        # 1. Truncate sessions DB (keep the file so SessionIndex doesn't need reinit).
+        if session_index is not None:
+            try:
+                async with aiosqlite.connect(session_index._db_path) as db:
+                    await db.execute("DELETE FROM sessions")
+                    await db.commit()
+                session_index._ready = False   # force schema re-check on next use
+                deleted.append("sessions.db (truncated)")
+            except Exception as exc:
+                errors.append(f"sessions.db: {exc}")
+
+        # 2. Delete all per-user subdirectories in memory_dir.
+        for entry in memory_dir.iterdir():
+            if entry.is_dir():
+                try:
+                    shutil.rmtree(entry)
+                    deleted.append(str(entry.name))
+                except Exception as exc:
+                    errors.append(f"{entry.name}: {exc}")
+
+        # 3. Delete loose files: known_avatars.json, .last_consolidation.
+        for fname in ("known_avatars.json", ".last_consolidation"):
+            fpath = memory_dir / fname
+            if fpath.exists():
+                try:
+                    fpath.unlink()
+                    deleted.append(fname)
+                except Exception as exc:
+                    errors.append(f"{fname}: {exc}")
+
+        # 4. Delete consolidated notes.
+        if notes_dir.exists():
+            try:
+                shutil.rmtree(notes_dir)
+                notes_dir.mkdir(parents=True, exist_ok=True)
+                deleted.append("notes/")
+            except Exception as exc:
+                errors.append(f"notes/: {exc}")
+
+        # 5. Clear in-memory exchange/prompt caches.
+        agent_core._last_prompt.clear()
+        agent_core._last_exchange.clear()
+
+        logger.warning("Memory reset: deleted %s", deleted)
+        return JSONResponse({"ok": not errors, "deleted": deleted, "errors": errors})
+
     return router
 
 
@@ -161,8 +219,19 @@ _DEBUG_HTML = """<!DOCTYPE html>
     --bg: #0f0f14; --surface: #1a1a24; --border: #2a2a3a;
     --accent: #8b5cf6; --text: #e2e2f0; --dim: #6b6b8a;
     --debug: #6b6b8a; --info: #60a5fa; --warning: #fbbf24;
-    --error: #f87171; --critical: #ff4444;
+    --error: #f87171; --critical: #ff4444; --danger: #dc2626;
   }
+  .btn-danger { background: var(--danger); border: 1px solid #b91c1c; color: #fff; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; font-family: monospace; }
+  .btn-danger:hover { background: #b91c1c; }
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 24px; max-width: 360px; width: 90%; }
+  .modal h2 { color: var(--error); font-size: 14px; margin-bottom: 10px; }
+  .modal p { color: var(--dim); font-size: 12px; margin-bottom: 18px; line-height: 1.6; }
+  .modal-btns { display: flex; gap: 8px; justify-content: flex-end; }
+  .modal-btns button { padding: 5px 14px; border-radius: 4px; cursor: pointer; font-size: 12px; font-family: monospace; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+  .modal-btns .btn-confirm { background: var(--danger); border-color: #b91c1c; color: #fff; }
+  .modal-btns .btn-confirm:hover { background: #b91c1c; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: monospace; font-size: 13px; }
   header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
@@ -244,7 +313,19 @@ _DEBUG_HTML = """<!DOCTYPE html>
   <span class="pill" id="log-status">● <span id="disconnected">connecting...</span></span>
   <span class="pill" id="sensor-age">sensors: —</span>
   <span class="pill" id="log-count">0 lines</span>
+  <button class="btn-danger" style="margin-left:auto" onclick="document.getElementById('reset-modal').classList.add('open')">Reset Memory</button>
 </header>
+
+<div class="modal-overlay" id="reset-modal">
+  <div class="modal">
+    <h2>⚠ Reset All Memory?</h2>
+    <p>This will permanently delete all conversation history, facts, notes, session records, and avatar data. The agent's identity and config are not affected. This cannot be undone.</p>
+    <div class="modal-btns">
+      <button onclick="document.getElementById('reset-modal').classList.remove('open')">Cancel</button>
+      <button class="btn-confirm" onclick="confirmReset()">Yes, delete everything</button>
+    </div>
+  </div>
+</div>
 
 <div class="tabs">
   <div class="tab active" onclick="switchTab('logs')">Logs</div>
@@ -739,6 +820,31 @@ function fmtAge(secs) {
 // ── Auto-refresh ──
 setInterval(refreshSensors, 5000);
 setInterval(refreshPrompts, 10000);
+
+async function confirmReset() {
+  const modal = document.getElementById('reset-modal');
+  const btn   = modal.querySelector('.btn-confirm');
+  btn.textContent = 'Deleting…';
+  btn.disabled    = true;
+  try {
+    const res  = await fetch('/debug/reset-memory', { method: 'DELETE' });
+    const data = await res.json();
+    modal.classList.remove('open');
+    if (data.ok) {
+      clearLogs();
+      promptData    = {};
+      selectedUser  = null;
+      document.getElementById('user-list').innerHTML    = '<div class="empty">Memory cleared.</div>';
+      document.getElementById('prompt-detail').innerHTML = '<div class="empty">Select a user to inspect.</div>';
+    } else {
+      alert('Partial reset — errors:\\n' + (data.errors || []).join('\\n'));
+    }
+  } catch (e) {
+    alert('Reset failed: ' + e.message);
+  }
+  btn.textContent = 'Yes, delete everything';
+  btn.disabled    = false;
+}
 </script>
 </body>
 </html>"""

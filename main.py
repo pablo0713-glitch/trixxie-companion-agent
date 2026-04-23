@@ -151,7 +151,7 @@ async def main() -> None:
 
     # ---- Debug page ----
     install_log_handler(asyncio.get_running_loop())
-    sl_app.include_router(create_debug_router(sensor_store, agent))
+    sl_app.include_router(create_debug_router(sensor_store, agent, session_index))
 
     # ---- Setup wizard ----
     sl_app.include_router(create_setup_router())
