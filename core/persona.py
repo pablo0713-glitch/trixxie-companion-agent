@@ -225,6 +225,21 @@ def get_identity_files_meta() -> dict[str, int]:
     return result
 
 
+def get_identity_files_text() -> dict[str, str]:
+    """Return {filename: text} for each identity file that exists."""
+    result: dict[str, str] = {}
+    for fname in ("agent.md", "soul.md", "user.md"):
+        path = _IDENTITY_DIR / fname
+        if path.exists():
+            try:
+                text = path.read_text(encoding="utf-8").strip()
+                if text:
+                    result[fname] = text
+            except OSError:
+                pass
+    return result
+
+
 def _load_identity_files() -> str:
     """Load agent.md, soul.md, user.md from data/identity/.
 

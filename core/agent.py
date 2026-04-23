@@ -19,6 +19,7 @@ from core.persona import (
     build_system_prompt_blocks,
     get_agent_config,
     get_identity_files_meta,
+    get_identity_files_text,
     _get_platform_awareness,
 )
 from core.rate_limiter import RateLimiter
@@ -97,10 +98,13 @@ class AgentCore:
         _identity_meta = get_identity_files_meta()
         _prompt_sections = {
             "identity_files": _identity_meta,
+            "identity_files_text": get_identity_files_text(),
             "identity_fallback": not bool(_identity_meta),
             "platform": context.platform,
             "platform_awareness_chars": len(_pa),
+            "platform_awareness_text": _pa,
             "additional_context_chars": len(_addl.strip()),
+            "additional_context_text": _addl.strip(),
             "memory_files_text": memory_files,
             "memory_files_chars": len(memory_files),
             "stm_bridge_text": stm_bridge,

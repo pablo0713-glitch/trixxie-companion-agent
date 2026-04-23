@@ -301,6 +301,12 @@ _DEBUG_HTML = """<!DOCTYPE html>
   .blk-empty { color: var(--dim); font-style: italic; padding: 2px 0; }
   .blk-ref { color: var(--dim); }
   .blk-ref a { color: var(--info); cursor: pointer; text-decoration: underline; }
+  details.blk-expand { margin: 2px 0; }
+  details.blk-expand summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  details.blk-expand summary::-webkit-details-marker { display: none; }
+  details.blk-expand summary::before { content: '▶'; font-size: 9px; color: var(--dim); transition: transform 0.15s; min-width: 10px; }
+  details.blk-expand[open] summary::before { transform: rotate(90deg); }
+  details.blk-expand .blk-expand-body { margin: 6px 0 4px 18px; padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; white-space: pre-wrap; word-break: break-all; font-size: 11px; color: var(--text); line-height: 1.6; max-height: 300px; overflow-y: auto; }
   .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-right: 4px; }
   .badge.sl { background: #1e3a5f; color: #60a5fa; }
   .badge.discord { background: #1e2a5f; color: #818cf8; }
@@ -652,30 +658,55 @@ function renderBlocksView(uid) {
     html += '<div class="blk-row"><span class="blk-label">[Identity]</span><span class="blk-chars" style="color:var(--warning)">config fallback (agent_config.json)</span></div>';
   } else {
     const files = ps.identity_files || {};
+    const texts = ps.identity_files_text || {};
     const fileNames = Object.keys(files);
     const maxChars = fileNames.length ? Math.max(...fileNames.map(f => files[f])) : 1;
     fileNames.forEach(fname => {
       const c = files[fname];
-      html += '<div class="blk-row">' +
-        '<span class="blk-label" style="color:var(--dim)">' + esc(fname) + '</span>' +
-        '<span class="blk-chars">' + fmtBytes(c) + '</span>' +
-        fmtBar(c, maxChars) +
-        '</div>';
+      const txt = texts[fname] || '';
+      if (txt) {
+        html += '<details class="blk-expand"><summary>' +
+          '<span class="blk-label" style="color:var(--dim)">' + esc(fname) + '</span>' +
+          '<span class="blk-chars">' + fmtBytes(c) + '</span>' +
+          fmtBar(c, maxChars) +
+          '</summary><div class="blk-expand-body">' + esc(txt) + '</div></details>';
+      } else {
+        html += '<div class="blk-row">' +
+          '<span class="blk-label" style="color:var(--dim)">' + esc(fname) + '</span>' +
+          '<span class="blk-chars">' + fmtBytes(c) + '</span>' +
+          fmtBar(c, maxChars) +
+          '</div>';
+      }
     });
   }
 
   // Platform awareness
-  html += '<div class="blk-row">' +
-    '<span class="blk-label">[Platform awareness — ' + esc(ps.platform || '?') + ']</span>' +
-    '<span class="blk-chars">' + (ps.platform_awareness_chars ? fmtBytes(ps.platform_awareness_chars) : '<span style="color:var(--dim)">—</span>') + '</span>' +
-    '</div>';
+  const paText = ps.platform_awareness_text || '';
+  if (paText) {
+    html += '<details class="blk-expand"><summary>' +
+      '<span class="blk-label">[Platform awareness — ' + esc(ps.platform || '?') + ']</span>' +
+      '<span class="blk-chars">' + fmtBytes(ps.platform_awareness_chars) + '</span>' +
+      '</summary><div class="blk-expand-body">' + esc(paText) + '</div></details>';
+  } else {
+    html += '<div class="blk-row">' +
+      '<span class="blk-label">[Platform awareness — ' + esc(ps.platform || '?') + ']</span>' +
+      '<span class="blk-chars"><span style="color:var(--dim)">—</span></span>' +
+      '</div>';
+  }
 
   // Additional context
-  const addlColor = ps.additional_context_chars ? 'var(--text)' : 'var(--dim)';
-  html += '<div class="blk-row">' +
-    '<span class="blk-label" style="color:' + addlColor + '">[Additional context]</span>' +
-    '<span class="blk-chars" style="color:' + addlColor + '">' + (ps.additional_context_chars ? fmtBytes(ps.additional_context_chars) : '—') + '</span>' +
-    '</div>';
+  const addlText = ps.additional_context_text || '';
+  if (addlText) {
+    html += '<details class="blk-expand"><summary>' +
+      '<span class="blk-label">[Additional context]</span>' +
+      '<span class="blk-chars">' + fmtBytes(ps.additional_context_chars) + '</span>' +
+      '</summary><div class="blk-expand-body">' + esc(addlText) + '</div></details>';
+  } else {
+    html += '<div class="blk-row">' +
+      '<span class="blk-label" style="color:var(--dim)">[Additional context]</span>' +
+      '<span class="blk-chars" style="color:var(--dim)">—</span>' +
+      '</div>';
+  }
 
   // MEMORY.md + USER.md
   const memText = ps.memory_files_text || '';
