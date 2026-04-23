@@ -7,6 +7,8 @@ data/agent_config.json
 data/identity/
 data/person_map.json
 summary-phase*.md
+lua/agent_companion.lua
+lsl/companion_bridge.lsl
 *.code-workspace
 .vscode/
 __pycache__/

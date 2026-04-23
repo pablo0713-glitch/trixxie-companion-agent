@@ -46,9 +46,16 @@ class _ScriptUpdateBody(BaseModel):
 
 
 def _patch_scripts(url: str, secret: str, grid: str, triggers: list[str]) -> dict[str, str]:
-    """Patch SERVER_URL / SECRET / GRID / TRIGGER_NAMES into the LSL and Lua scripts."""
+    """Patch SERVER_URL / SECRET / GRID / TRIGGER_NAMES into the LSL and Lua scripts.
+    If the output file is absent, it is generated from the .template file first.
+    """
     lsl_path = _ROOT / "lsl" / "companion_bridge.lsl"
     lua_path = _ROOT / "lua" / "agent_companion.lua"
+    for path in (lsl_path, lua_path):
+        template = path.with_suffix(path.suffix + ".template")
+        if not path.exists() and template.exists():
+            import shutil as _shutil
+            _shutil.copy(template, path)
     triggers_lsl = ", ".join(f'"{t}"' for t in triggers if t)
     results: dict[str, str] = {}
 
