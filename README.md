@@ -1,4 +1,5 @@
 # Trixxie — Friendly Companion Agent
+![Trixxie HUD Banner](trixxiebanner.png)
 
 A self-hosted AI companion that lives simultaneously in **Second Life** (or OpenSimulator) and **Discord**. Powered by **Claude (Anthropic)**, **OpenAI**, **Gemini**, **Grok**, **OpenRouter**, or any local model via **Ollama** or **LM Studio**. Personality, memory, tools, and platform behavior are fully configurable through a browser-based setup wizard — no code editing required.
 

@@ -1,0 +1,119 @@
+========================================
+  Trixxie — Friendly Companion Agent
+  AI Companion for Second Life & Discord
+========================================
+
+This HUD turns a Second Life avatar into a live AI companion powered
+by Claude (Anthropic), GPT-4, Gemini, Grok, or a local model via
+Ollama. The agent remembers conversations, searches the web, sees
+nearby avatars and environment data, and responds to IMs or local
+chat triggers — all from a self-hosted server you run yourself.
+
+Full documentation and source code:
+https://github.com/pablo0713-glitch/trixxie-companion-agent
+
+
+----------------------------------------
+  WHAT'S IN THIS PACKAGE
+----------------------------------------
+
+  companion_bridge.lsl   — The HUD script (paste into an object
+                           and attach to your avatar)
+
+  SETUP_NOTECARD         — This notecard
+
+
+----------------------------------------
+  QUICK START
+----------------------------------------
+
+STEP 1 — Set up the server
+
+  Follow the setup guide at the GitHub link above. You will need:
+
+  - Python 3.10+ on a computer that stays online
+  - An API key for your chosen AI provider
+    (Anthropic, OpenAI, etc.)
+  - cloudflared (or similar) to create a public HTTPS tunnel
+    to your local server
+
+
+STEP 2 — Get your tunnel URL
+
+  Start your server (./run.sh) and then start cloudflared:
+
+    cloudflared tunnel --url http://localhost:8080
+
+  Copy the https:// URL it prints. This is your SERVER_URL.
+  Note: free cloudflared tunnels change URL on every restart.
+  For a permanent URL, set up a named Cloudflare tunnel.
+
+
+STEP 3 — Configure the HUD script
+
+  Open companion_bridge.lsl and set these values at the top:
+
+    string SERVER_URL = "https://your-tunnel-url.trycloudflare.com";
+    string SECRET     = "your-bridge-secret";
+    string GRID       = "sl";      // "sl" for Second Life, "opensim" for OpenSimulator
+    list   TRIGGER_NAMES = ["Primary", "Alias1", "Alias2"];
+
+  SECRET must match SL_BRIDGE_SECRET in your server's .env file.
+  Leave SECRET as "" if you did not set a bridge secret.
+
+  TRIGGER_NAMES is the list of names that trigger a response in
+  local chat (channel 0). Replace with your agent's name and aliases.
+
+  If running on OpenSimulator, also set:
+    string GRID = "opensim";
+
+
+STEP 4 — Create and wear the HUD
+
+  1. Rez a small prim in-world
+  2. Open its Contents tab and create a new script
+  3. Delete the default script and paste in companion_bridge.lsl
+  4. Save — it compiles automatically (use Mono compiler)
+  5. Right-click the prim > More > Attach HUD
+
+  The HUD will say "Sensory HUD active" in local chat when ready.
+  Touch it to open the sensor control panel.
+
+
+STEP 5 — Talk to your agent
+
+  Private channel (no one else sees this):
+    /42 Hey, what do you think of this sim?
+
+  Local chat trigger (public, reply is public):
+    Hey [AgentName], what's the vibe in here?
+
+
+----------------------------------------
+  OPTIONAL — Cool VL Viewer Lua Script
+----------------------------------------
+
+If your agent's avatar runs Cool VL Viewer, a native Lua script
+is also available in the GitHub repo. It enables private IM
+conversations without the /42 channel and shows a typing indicator
+during inference. See lua/README.md for details.
+
+
+----------------------------------------
+  CONTACT & SUPPORT
+----------------------------------------
+
+  Second Life:  StonedGrits
+                (IMs can get capped — a notecard is safer)
+
+  Discord:      tanmojo
+
+  Email:        pablo071372@outlook.com
+
+  GitHub:       https://github.com/pablo0713-glitch/trixxie-companion-agent
+                Open an issue for bugs or feature requests.
+
+
+========================================
+  MIT License — free to use and modify
+========================================
