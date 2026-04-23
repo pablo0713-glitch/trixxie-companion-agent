@@ -50,7 +50,9 @@ An LSL HUD script for Second Life that gives Trixxie continuous environmental aw
 /42 Hey Trixxie, what's the vibe in here?
 ```
 
-The HUD forwards your message plus a rolling buffer of the last 10 local chat lines to the bridge server, and delivers Trixxie's reply back to you via instant message.
+The HUD forwards your message plus any queued local chat lines to the bridge server, and delivers Trixxie's reply back to you via instant message.
+
+**Name trigger (local chat):** if a name in `TRIGGER_NAMES` at the top of the script appears anywhere in local chat (channel 0), the HUD fires a `/sl/message` POST and delivers the reply publicly via `llSay(0)`. Default trigger names: `Trixxie`, `Trix`, `Trixx`. Replace with your agent's name. This applies to all nearby avatars, including the owner.
 
 ---
 
@@ -58,18 +60,15 @@ The HUD forwards your message plus a rolling buffer of the last 10 local chat li
 
 | Sensor | Default | How often |
 |---|---|---|
-| Environment | ON | On attach, on region change |
-| Avatars | ON | Every 150 s (5 timer ticks × 30 s) |
-| Chat | ON | On every chat event matching the filter |
-| Objects | OFF | On region change (if enabled), on toggle |
+| Environment | ON | On attach, on region/parcel change, every 600 s |
+| Avatars | ON | Every 60 s (2 timer ticks × 30 s) |
+| Chat | ON | Flushed every 90 s and immediately before each `/42` message |
+| Objects | ON | On attach, on region/parcel change, every 300 s |
+| RLV / avatar state | ON | Every 30 s (every tick) |
 
-**Chat buffer:** the HUD keeps a rolling window of the last **10** local chat lines. All 10 are attached to every `/42` message as ambient context for Trixxie — the server uses the full 10.
+**Chat buffer:** the HUD keeps a rolling window of the last **10** local chat lines. The buffer is flushed to `/sl/sensor` (type `chat`) every 90 seconds and immediately when a `/42` message is received. The server accumulates up to 30 lines and injects only lines received since the user's last message.
 
-**Chat filter modes:**
-- *DJ/Objects only* (default) — forwards only messages from non-avatar sources (stream announcers, DJ bots, scripted objects)
-- *All Chat* — forwards every message heard on channel 0
-
-**Avatar scanning:** always scans the full region via `llGetAgentList` and returns the **25 closest avatars** to Trixxie, sorted by distance. The list is capped at 25 regardless of how many avatars are present in the sim — this keeps memory usage stable and prevents stack-heap collisions in crowded regions (up to 100 avatars).
+**Avatar scanning:** always scans the full region via `llGetAgentList` and returns the **25 closest avatars** to Trixxie, sorted by distance. The list is capped at 25 regardless of how many avatars are present — this keeps memory stable and prevents stack-heap collisions in crowded regions (Mono compiler, up to 100 avatars).
 
 ---
 
@@ -81,7 +80,9 @@ If `SECRET` is set, every outbound HTTP request includes the header:
 X-SL-Secret: <your secret>
 ```
 
-The bridge server should reject requests that do not present this header.
+The bridge server rejects requests that do not present this header or the matching body field. The Lua script (`lua/agent_companion.lua`) cannot send custom HTTP headers, so it includes the secret in the JSON body instead — the server accepts both locations.
+
+`SECRET` and `SERVER_URL` can be patched automatically via the setup wizard (Step 3 → **Update Scripts**), or manually at the top of the script before compiling.
 
 ---
 

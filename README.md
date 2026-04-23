@@ -140,6 +140,8 @@ Enable the platforms you want:
 - Paste a bridge secret (any random string — used to authenticate HUD requests)
 - Set the port if you need something other than 8080
 
+After filling in the Second Life fields, click **Update Scripts** to automatically write your `SERVER_URL`, `SECRET`, and `GRID` values into both `lsl/companion_bridge.lsl` and `lua/agent_companion.lua`. This saves you from editing the scripts manually. The scripts are also updated automatically when you click **Next** on this step.
+
 ### Step 4 — Identity
 
 Define your agent's character through three markdown files edited directly in the wizard:
@@ -378,6 +380,8 @@ While the agent is running, **[http://localhost:8080/debug](http://localhost:808
 | **Prompts & Exchanges** | The exact system prompt and messages array sent for each user. Auto-refreshes every 10s. |
 
 Use this to verify sensor data is arriving, inspect what the model actually sees, and diagnose unexpected behavior.
+
+The page also includes a **Reset Memory** button (top right, red). Clicking it shows a confirmation modal — confirming wipes all conversation history, memory files, session index, and avatar records. Useful for a clean-slate restart without stopping the agent.
 
 </details>
 

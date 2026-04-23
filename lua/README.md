@@ -13,6 +13,12 @@ This interface **replaces the conversation path only**. The LSL HUD is still nee
 
 ---
 
+## Important — Agent's Viewer Only
+
+This script must be installed on **the agent's viewer** (the viewer logged in as Trixxie's avatar). Do **not** install it on your own viewer. If you run `automation.lua` on your viewer, your viewer will forward Trixxie's outgoing IMs back to the bridge — triggering a second inference call for each reply and producing a hallucination loop that spirals until you stop the script.
+
+---
+
 ## Installation
 
 1. Copy `agent_companion.lua` to your Cool VL Viewer user settings folder:
@@ -42,15 +48,24 @@ This interface **replaces the conversation path only**. The LSL HUD is still nee
 | Step | What happens |
 |---|---|
 | Someone sends the agent a private IM | `OnInstantMsg` fires (type == 0, peer-to-peer only) |
+| | Echo check — if the message matches a recently sent reply, it is discarded |
 | | `SetAgentTyping(true)` — typing indicator appears immediately |
 | | `PostHTTP` fires an async POST to `/sl/message` |
 | Model returns a reply | `OnHTTPReply` fires |
 | | `SetAgentTyping(false)` — indicator clears |
 | | Reply is split into ≤ 1000-char chunks and delivered via `SendIM` |
-| Avatar speaks in local chat | `OnReceivedChat` appends the line to a 10-line rolling buffer |
-| | Buffer is included as `nearby_chat` context in the next IM POST |
 
 The typing indicator is visible for exactly the duration of model inference — the same natural feel as a human typing a response.
+
+Nearby chat context is **not** captured by this script. It is delivered via the LSL HUD's sensor pipeline (`/sl/sensor` type `chat`) and injected into the system prompt by `SensorStore.get_changes()` on each message. The HUD must be worn and active.
+
+---
+
+## Echo Suppression
+
+Cool VL Viewer reflects sent IMs back through `OnInstantMsg` with the **recipient's UUID** as `origin_id` rather than the sender's. This bypasses the standard self-check (`origin_id == self_info["id"]`) and would otherwise cause Trixxie's own reply to loop back as a new incoming message.
+
+The script maintains a `sent_replies` table. Each chunk is stamped with `os.time()` immediately before `SendIM`. On the next `OnInstantMsg`, if the incoming text matches any entry in `sent_replies` written within the last 10 seconds, the message is silently dropped. Entries expire after 10 seconds to avoid false-positive suppression of repeated phrases across different conversations.
 
 ---
 

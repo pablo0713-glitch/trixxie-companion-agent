@@ -55,6 +55,9 @@ core/
                                  After each exchange: fire-and-forget _append_stm_entry()
                                  generates a 1–2 sentence summary and appends it to
                                  stm.json (rolling 10 entries) for cross-platform bridging.
+                                 Empty-turn guard: assistant turns with no content are
+                                 skipped before persistence (empty content is invalid for
+                                 the Anthropic API and causes model confusion).
 
   persona.py        Persona      Identity-file-based persona. _load_identity_files()
                                  reads data/identity/agent.md + soul.md + user.md
@@ -124,6 +127,9 @@ memory/
                                           access (avoids Pydantic MockValSer on Py 3.14).
                                           append_turn() fires SessionIndex.index_turn()
                                           as a background task after each write.
+                                          _sanitize_tool_pairs() filters empty-content
+                                          turns before orphan-cleanup passes — prevents
+                                          invalid turns from accumulating via history trim.
   schemas.py                              Pydantic models for JSON file structure.
   person_map.py     PersonMap             Loads data/person_map.json. Maps canonical
                                           person IDs ↔ platform user IDs.
@@ -234,6 +240,17 @@ lua/
                                           no OnReceivedChat buffer in the Lua script.
                                           Replaces the /42 conversation path; sensor HUD
                                           remains required for environmental context.
+                                          Echo suppression: sent_replies table stamps each
+                                          outbound chunk before SendIM. Cool VL Viewer
+                                          reflects sent IMs back through OnInstantMsg with
+                                          the recipient UUID (bypasses the self-check).
+                                          Chunks are matched against sent_replies within a
+                                          10-second window and discarded if found, preventing
+                                          loopback from triggering a second inference call.
+                                          IMPORTANT: this script must only run on the agent's
+                                          viewer. Running it on the owner's viewer causes the
+                                          owner's viewer to forward the agent's replies back
+                                          to the bridge, producing a hallucination loop.
 
 setup/
   index.html                              Wizard shell — step bar, content area, footer.
@@ -249,6 +266,12 @@ setup/
                                           enabled platforms shown).
                                           Steps: Agent, Model, Platforms, Identity,
                                           Tools, Context, Save.
+                                          Step 3 (Platforms): "Update Scripts" button and
+                                          status span. Calls POST /setup/update-scripts with
+                                          the current SERVER_URL, SECRET, and GRID values.
+                                          Auto-triggers silently when the user clicks Next
+                                          on Step 3 and SL is enabled, so scripts are always
+                                          in sync without a manual button press.
 
 interfaces/
   setup_server.py                         FastAPI APIRouter for the setup wizard.
@@ -258,9 +281,19 @@ interfaces/
                                           then runs _migrate_owner_key() which renames any
                                           non-SL_Notes key in person_map.json to SL_Notes
                                           and moves the notes folder accordingly.
+                                          POST /setup/update-scripts — reads SERVER_URL,
+                                          SECRET, GRID, and TRIGGER_NAMES from the request
+                                          body and patches lsl/companion_bridge.lsl and
+                                          lua/agent_companion.lua in-place using regex lambda
+                                          substitution (avoids backreference issues with
+                                          special chars in URLs and secrets).
 
   debug_server.py                         FastAPI APIRouter for live agent inspection.
+                                          Accepts session_index: SessionIndex | None as a
+                                          third argument to create_debug_router().
                                           GET /debug — inline HTML debug page (three tabs).
+                                            Header includes a red "Reset Memory" button that
+                                            opens a confirmation modal before deletion.
                                           GET /debug/logs — SSE stream of all Python log
                                             records; client-side filter by level + logger.
                                             250ms poll loop; initial comment flushes headers
@@ -276,6 +309,15 @@ interfaces/
                                             Shows char counts per section and total payload
                                             size estimate (~system + messages).
                                             User selected via data-uid attribute on list items.
+                                          DELETE /debug/reset-memory — wipes all agent state:
+                                            truncates sessions.db (DELETE FROM sessions),
+                                            resets session_index._ready = False,
+                                            removes all per-user memory subdirs,
+                                            deletes known_avatars.json + .last_consolidation,
+                                            recreates empty notes dir,
+                                            clears agent_core._last_prompt and _last_exchange.
+                                            Returns {status: "ok"} on success. Confirmation
+                                            modal in JS guards against accidental clicks.
                                           SSELogHandler bridges logging → asyncio.Queue.
                                           Fan-out broadcaster task copies records to all
                                           connected subscriber queues.
@@ -856,8 +898,11 @@ asyncio event loop
         ├── POST /sl/sensor → SensorStore.update()
         ├── POST /sl/message → AgentCore.handle_message() (async)
         ├── GET  /debug/logs → SSE StreamingResponse
+        ├── DELETE /debug/reset-memory → wipe all agent state
         └── GET  /setup/* → wizard API
 ```
+
+If `ANTHROPIC_API_KEY` (or the equivalent provider key) is missing when `main()` starts, `load_settings()` raises `EnvironmentError`. `main()` catches this and calls `_run_setup_wizard_only()`, which starts a minimal single-router FastAPI app (wizard only, no bridge, no debug page) so the user can complete setup at `/setup` without being blocked by a startup crash.
 
 All three services share the same `AgentCore`, `FileMemoryStore`, `LocationStore`, and `AvatarStore` instances. Concurrent writes to the same memory file are serialised by per-(user, channel) `asyncio.Lock` in `FileMemoryStore`. `LocationStore` uses a per-user `asyncio.Lock`; `AvatarStore` uses a single file-level lock (one global file for all avatars).
 
