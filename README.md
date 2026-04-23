@@ -293,9 +293,14 @@ After enabling, restart the viewer and wear the HUD. The RLV handshake fires aut
 
 <br>
 
-If your agent's avatar uses **Cool VL Viewer**, you can install the Lua automation script for a native private IM experience — no `/42` channel command needed. The avatar shows a typing indicator while the model processes and replies in the IM window directly.
+If your agent's avatar uses **Cool VL Viewer**, you can install the Lua automation script for a native private IM experience — no `/42` channel command needed. The avatar shows a typing indicator while the model processes and delivers the reply in the IM window directly.
 
-See [lua/README.md](lua/README.md) for setup. The LSL HUD is still required for sensor context.
+`lua/agent_companion.lua` is generated automatically by `./run.sh` with your credentials filled in. Two ways to load it:
+
+- **Recommended — symlink:** Create a symlink from `automation.lua` in your Cool VL Viewer user settings folder pointing to `lua/agent_companion.lua` in your install. After any update, reload instantly with **Advanced → Lua scripting → Re-load current automation script** — no copying needed.
+- **Alternative — copy:** Copy `lua/agent_companion.lua` to the viewer's user settings folder as `automation.lua`. Re-copy after updates.
+
+See [lua/README.md](lua/README.md) for full commands. The LSL HUD is still required for sensor context.
 
 </details>
 

@@ -21,25 +21,54 @@ This script must be installed on **the agent's viewer** (the viewer logged in as
 
 ## Installation
 
-1. Copy `agent_companion.lua` to your Cool VL Viewer user settings folder:
+`lua/agent_companion.lua` is generated automatically by `./run.sh` with your credentials already filled in from `.env`. You do not need to edit it manually.
 
-   | OS | Path |
-   |---|---|
-   | Linux | `~/.secondlife/user_settings/automation.lua` |
-   | Windows | `%APPDATA%\SecondLife\user_settings\automation.lua` |
-   | macOS | `~/Library/Application Support/SecondLife/user_settings/automation.lua` |
+There are two ways to load it into Cool VL Viewer:
 
-   > If `automation.lua` already exists, append or merge the three callback functions and config block rather than replacing the file.
+---
 
-2. Edit the config block at the top of the file:
+### Option 1 — Symlink (recommended)
 
-   ```lua
-   local SERVER_URL = "YOUR_TUNNEL_URL"   -- base URL, same as LSL HUD
-   local SECRET     = ""                  -- match SL_BRIDGE_SECRET in .env, or leave empty
-   local GRID       = "sl"               -- "opensim" if running on an OpenSim grid
-   ```
+Create a symlink from Cool VL Viewer's default automation script location to the generated file in your companion-agent folder. The viewer loads the script from its usual path, but it actually reads the one in your repo. When the script is updated by `./run.sh`, you can reload it instantly from **Advanced → Lua scripting → Re-load current automation script** — no file copying needed.
 
-3. Restart Cool VL Viewer (or reload the script via **Advanced → Lua → Reload**).
+**Linux:**
+```bash
+ln -sf /path/to/trixxie-companion-agent/lua/agent_companion.lua \
+    ~/.secondlife/user_settings/automation.lua
+```
+
+**Windows** (run as Administrator):
+```cmd
+mklink "%APPDATA%\SecondLife\user_settings\automation.lua" "C:\path\to\trixxie-companion-agent\lua\agent_companion.lua"
+```
+
+**macOS:**
+```bash
+ln -sf /path/to/trixxie-companion-agent/lua/agent_companion.lua \
+    ~/Library/Application\ Support/SecondLife/user_settings/automation.lua
+```
+
+> Replace `/path/to/trixxie-companion-agent` with the actual path to your install (e.g. `/home/yourname/trixxie-companion-agent`).
+
+---
+
+### Option 2 — Copy the file
+
+Copy `lua/agent_companion.lua` to the Cool VL Viewer user settings folder and rename it `automation.lua`:
+
+| OS | Destination |
+|---|---|
+| Linux | `~/.secondlife/user_settings/automation.lua` |
+| Windows | `&#37;APPDATA&#37;\SecondLife\user_settings\automation.lua` |
+| macOS | `~/Library/Application Support/SecondLife/user_settings/automation.lua` |
+
+You will need to re-copy the file any time the script is updated by `./run.sh`.
+
+> If `automation.lua` already exists at that path, replace it entirely rather than merging — the companion script is self-contained.
+
+---
+
+After either option, reload or restart Cool VL Viewer.
 
 ---
 
@@ -96,7 +125,7 @@ Cool VL Viewer's `PostHTTP` cannot send custom HTTP headers, so the secret is in
 |---|---|---|
 | Conversation trigger | `/42 message` in local chat | Private IM to the agent directly |
 | Sensor data (avatars, env, etc.) | Yes | No — HUD still required |
-| Ambient chat buffer | Yes | Yes — `OnReceivedChat` |
+| Ambient chat buffer | Yes | No — via HUD sensor pipeline only |
 | Typing indicator | No | Yes — `SetAgentTyping` |
 | Reply chunking | `send_chunked()` in LSL | `split_chunks()` in Lua |
 | Mute / unmute / is_muted | No | Yes — `AddMute` / `RemoveMute` / `IsMuted` |
