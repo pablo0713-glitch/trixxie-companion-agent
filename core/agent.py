@@ -138,6 +138,10 @@ class AgentCore:
                 text="Something went sideways on my end. Give me a moment and try again.",
             )
 
+        if not reply_text:
+            logger.warning("Empty reply_text for user %s — returning fallback", context.user_id)
+            return AgentResponse(text="I lost that one — something cut me off mid-thought. Ask me again?")
+
         for turn in assistant_turns:
             if not turn.get("content"):
                 continue
@@ -280,7 +284,9 @@ class AgentCore:
             accumulated_turns.append(assistant_turn)
             messages = messages + [assistant_turn]
 
-            if response.stop_reason == "end_turn":
+            if response.stop_reason in ("end_turn", "max_tokens"):
+                if not response.text:
+                    logger.warning("Empty text at stop_reason=%s for user %s", response.stop_reason, context.user_id)
                 return response.text, accumulated_turns
 
             if response.stop_reason == "tool_use":

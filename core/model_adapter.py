@@ -97,7 +97,10 @@ class AnthropicAdapter(ModelAdapter):
                 tool_calls.append(ToolCall(id=bid, name=bname, input=binput))
                 history_content.append({"type": "tool_use", "id": bid, "name": bname, "input": binput})
 
-        stop_reason = "tool_use" if response.stop_reason == "tool_use" else "end_turn"
+        raw_stop = response.stop_reason
+        if raw_stop == "max_tokens":
+            logger.warning("max_tokens hit — text=%d chars, tool_calls=%d", len("".join(text_parts)), len(tool_calls))
+        stop_reason = "tool_use" if raw_stop == "tool_use" else raw_stop or "end_turn"
         return ModelResponse(
             stop_reason=stop_reason,
             text="\n".join(text_parts).strip(),
