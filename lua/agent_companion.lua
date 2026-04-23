@@ -18,7 +18,7 @@ local IM_CHUNK_SIZE = 1000       -- max chars per SendIM call
 
 -- --- State ---
 local pending_ims  = {}   -- [handle] = {session_id, origin_id}
-local sent_replies = {}   -- [text] = timestamp — echo suppression
+local sent_replies = {}   -- [text] = pending echo count — echo suppression
 
 
 -- ================================================================
@@ -74,9 +74,8 @@ end
 -- Deliver a (potentially long) reply as successive SendIM calls.
 local function send_chunked(session_id, text)
     local chunks = split_chunks(text)
-    local now    = os.time()
     for _, chunk in ipairs(chunks) do
-        sent_replies[chunk] = now   -- stamp before sending so echo arrives after
+        sent_replies[chunk] = (sent_replies[chunk] or 0) + 1
         SendIM(session_id, chunk)
     end
 end
@@ -96,11 +95,11 @@ function OnInstantMsg(session_id, origin_id, msg_type, name, text)
 
     -- Suppress echo: Cool VL Viewer reflects sent IMs back through OnInstantMsg
     -- with the recipient's origin_id rather than the sender's, bypassing the
-    -- self-check above. Reject any text that matches a recently sent reply.
-    local now = os.time()
-    for sent_text, ts in pairs(sent_replies) do
-        if now - ts > 10 then sent_replies[sent_text] = nil  -- expire after 10s
-        elseif text == sent_text then return end
+    -- self-check above. Consume one pending echo count for this text, if any.
+    if sent_replies[text] and sent_replies[text] > 0 then
+        sent_replies[text] = sent_replies[text] - 1
+        if sent_replies[text] == 0 then sent_replies[text] = nil end
+        return
     end
 
     -- Build the POST payload.

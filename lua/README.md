@@ -65,7 +65,7 @@ Nearby chat context is **not** captured by this script. It is delivered via the 
 
 Cool VL Viewer reflects sent IMs back through `OnInstantMsg` with the **recipient's UUID** as `origin_id` rather than the sender's. This bypasses the standard self-check (`origin_id == self_info["id"]`) and would otherwise cause Trixxie's own reply to loop back as a new incoming message.
 
-The script maintains a `sent_replies` table. Each chunk is stamped with `os.time()` immediately before `SendIM`. On the next `OnInstantMsg`, if the incoming text matches any entry in `sent_replies` written within the last 10 seconds, the message is silently dropped. Entries expire after 10 seconds to avoid false-positive suppression of repeated phrases across different conversations.
+The script maintains a `sent_replies` counter table. Each chunk increments its counter before `SendIM`. On the next `OnInstantMsg`, if the incoming text has a pending count > 0, the count is decremented and the message is dropped. Each echo is consumed exactly once, so the same text sent legitimately later is not affected.
 
 ---
 
