@@ -63,7 +63,7 @@ key sk_rlv = NULL_KEY;
 
 // --- Ambient chat buffer (sent as context with /42 messages) ---
 list    nearby_chat  = [];
-integer listen_chat  = -1;   // handle for channel 0 listener (-1 = not registered)
+integer listen_chat;   // handle for channel 0 listener
 
 // --- Object / RLV scan state machine (clothing scan removed — replaced by RLV commands) ---
 // 0=idle  3=object proximity  4=RLV sitting-object resolution
@@ -548,13 +548,8 @@ default
     state_entry()
     {
         llListen(LISTEN_CHANNEL, "", NULL_KEY, "");
-        // Only listen on channel 0 when chat buffering is enabled.
-        // An unconditional channel-0 listen in a busy area floods the 64-event
-        // queue and causes touch_start events to be silently dropped.
-        if (s_chat)
-            listen_chat = llListen(0, "", NULL_KEY, "");
-        else
-            listen_chat = -1;
+        listen_chat = llListen(0, "", NULL_KEY, "");
+        if (!s_chat) llListenControl(listen_chat, FALSE);
         llListen(UI_CHANNEL, "", llGetOwner(), "");
         llListen(RLV_CHAN,  "", NULL_KEY, "");
         llListen(RLV_CHAN2, "", NULL_KEY, "");
@@ -721,14 +716,8 @@ default
             else if (message == "Chat")
             {
                 s_chat = !s_chat;
-                if (s_chat)
-                    listen_chat = llListen(0, "", NULL_KEY, "");
-                else if (listen_chat != -1)
-                {
-                    llListenRemove(listen_chat);
-                    listen_chat = -1;
-                    nearby_chat = [];   // discard buffered chat
-                }
+                llListenControl(listen_chat, s_chat);
+                if (!s_chat) nearby_chat = [];
                 show_menu();
             }
             else if (message == "Environment") { s_env     = !s_env;     show_menu(); }
