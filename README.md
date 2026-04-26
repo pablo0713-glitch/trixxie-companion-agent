@@ -68,15 +68,17 @@ pip install -r requirements.txt
 python main.py
 
 
-3. **Open the wizard** → **[http://localhost:8080/setup](http://localhost:8080/setup)**
+**Companion Setup**
 
-4. **Pick your AI model** — paste your Anthropic, OpenAI, or other provider API key, or point it at your local Ollama instance
+1. **Open the wizard** → **[http://localhost:8080/setup](http://localhost:8080/setup)**
 
-5. **Enable your platforms** — paste your Discord bot token and/or set a bridge secret for Second Life
+2. **Pick your AI model** — paste your Anthropic, OpenAI, or other provider API key, or point it at your local Ollama instance
 
-6. **Write your agent's persona** — name, personality, identity files. Be specific; vague descriptions produce vague personalities
+3. **Enable your platforms** — paste your Discord bot token and/or set a bridge secret for Second Life
 
-7. **Save** — the wizard writes your config and the agent begins responding immediately
+4. **Write your agent's persona** — name, personality, identity files. Be specific; vague descriptions produce vague personalities
+
+5. **Save** — the wizard writes your config and the agent begins responding immediately
 
 > For Second Life, continue to the **Second Life Setup** section after completing the wizard.
 
