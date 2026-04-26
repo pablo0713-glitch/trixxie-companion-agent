@@ -118,7 +118,7 @@ sudo systemctl enable --now trixxie
 
 #### 3. Bypassing Tunnels (HTTPS with Nginx + nip.io)
 
-If you have a static VPS IP (e.g., `155.138.223.115`) and no domain:
+If you have a static VPS IP (e.g., `123.456.789.012`) and no domain:
 
 1. **Nginx Config:** Create `/etc/nginx/conf.d/trixxie.conf`:
     
@@ -127,7 +127,7 @@ If you have a static VPS IP (e.g., `155.138.223.115`) and no domain:
     ```
     server {
         listen 80;
-        server_name 155.138.223.115.nip.io;
+        server_name 123.456.789.012.nip.io;
         location / {
             proxy_pass http://127.0.0.1:8080;
             proxy_set_header Host $host;
@@ -138,9 +138,9 @@ If you have a static VPS IP (e.g., `155.138.223.115`) and no domain:
     }
     ```
     
-2. **SSL:** Run `sudo certbot --nginx -d 155.138.223.115.nip.io`
+2. **SSL:** Run `sudo certbot --nginx -d 123.456.789.012.nip.io`
     
-3. **Remote .env:** Ensure `SL_BRIDGE_URL=https://155.138.223.115.nip.io` is set. This allows the Setup Wizard to generate the correct LSL scripts for your HUD.
+3. **Remote .env:** Ensure `SL_BRIDGE_URL=https://123.456.789.012.nip.io` is set. This allows the Setup Wizard to generate the correct LSL scripts for your HUD.
     
 
 ---
