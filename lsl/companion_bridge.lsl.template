@@ -62,7 +62,8 @@ key sk_clo = NULL_KEY;
 key sk_rlv = NULL_KEY;
 
 // --- Ambient chat buffer (sent as context with /42 messages) ---
-list nearby_chat = [];
+list    nearby_chat  = [];
+integer listen_chat  = -1;   // handle for channel 0 listener (-1 = not registered)
 
 // --- Object / RLV scan state machine (clothing scan removed — replaced by RLV commands) ---
 // 0=idle  3=object proximity  4=RLV sitting-object resolution
@@ -547,7 +548,13 @@ default
     state_entry()
     {
         llListen(LISTEN_CHANNEL, "", NULL_KEY, "");
-        llListen(0, "", NULL_KEY, "");
+        // Only listen on channel 0 when chat buffering is enabled.
+        // An unconditional channel-0 listen in a busy area floods the 64-event
+        // queue and causes touch_start events to be silently dropped.
+        if (s_chat)
+            listen_chat = llListen(0, "", NULL_KEY, "");
+        else
+            listen_chat = -1;
         llListen(UI_CHANNEL, "", llGetOwner(), "");
         llListen(RLV_CHAN,  "", NULL_KEY, "");
         llListen(RLV_CHAN2, "", NULL_KEY, "");
@@ -567,8 +574,14 @@ default
 
     touch_start(integer n)
     {
-        if (llDetectedKey(0) == llGetOwner())
-            show_menu();
+        if (llDetectedKey(0) != llGetOwner()) return;
+        // Clear any stuck in-flight state so a tap always wakes the HUD.
+        reply_http    = NULL_KEY;
+        reply_sender  = NULL_KEY;
+        reply_lc_http = NULL_KEY;
+        reply_lc_id   = NULL_KEY;
+        scan_mode     = 0;
+        show_menu();
     }
 
     timer()
@@ -583,6 +596,13 @@ default
         }
 
         tick++;
+
+        // Memory watchdog — reset before a stack/heap collision silently kills the script
+        if (llGetFreeMemory() < 8000)
+        {
+            llOwnerSay("HUD memory low — resetting.");
+            llResetScript();
+        }
 
         // Region change → re-scan everything, reset tick counter
         string r = llGetRegionName();
@@ -698,7 +718,19 @@ default
         if (channel == UI_CHANNEL)
         {
             if      (message == "Avatars")     { s_avatars = !s_avatars; show_menu(); }
-            else if (message == "Chat")        { s_chat    = !s_chat;    show_menu(); }
+            else if (message == "Chat")
+            {
+                s_chat = !s_chat;
+                if (s_chat)
+                    listen_chat = llListen(0, "", NULL_KEY, "");
+                else if (listen_chat != -1)
+                {
+                    llListenRemove(listen_chat);
+                    listen_chat = -1;
+                    nearby_chat = [];   // discard buffered chat
+                }
+                show_menu();
+            }
             else if (message == "Environment") { s_env     = !s_env;     show_menu(); }
             else if (message == "Objects")
             {
@@ -884,5 +916,13 @@ default
                 do_outfit_scan();
             idx++;
         }
+    }
+
+    // Re-register with the sim after teleport, region crossing, or sim restart.
+    // HUD scripts can lose touch/event registration across these boundaries.
+    changed(integer change)
+    {
+        if (change & (CHANGED_REGION | CHANGED_TELEPORT | CHANGED_REGION_START))
+            llResetScript();
     }
 }
