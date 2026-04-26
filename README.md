@@ -38,6 +38,8 @@ A self-hosted AI companion that lives simultaneously in **Second Life** (or Open
 
 **Have your API key and (if using Discord) your bot token ready. The whole thing takes about 5 minutes.**
 
+**Linux**
+
 1. **Clone and install**
    ```bash
    git clone https://github.com/pablo0713-glitch/trixxie-companion-agent.git
@@ -50,6 +52,21 @@ A self-hosted AI companion that lives simultaneously in **Second Life** (or Open
    ```bash
    ./run.sh
    ```
+
+**Windows Powershell**
+
+1. **Clone**
+git clone https://github.com/pablo0713-glitch/trixxie-companion-agent.git
+cd trixxie-companion-agent
+
+2. **Setup Virtual Environment**
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+3. **Install & Run**
+pip install -r requirements.txt
+python main.py
+
 
 3. **Open the wizard** → **[http://localhost:8080/setup](http://localhost:8080/setup)**
 
