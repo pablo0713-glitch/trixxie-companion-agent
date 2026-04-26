@@ -104,7 +104,7 @@ Your `.env`, `data/`, and configured scripts are not touched by a pull. The LSL 
 <br>
 
 - **Python 3.10+**
-- An **Anthropic API key** — [console.anthropic.com](https://console.anthropic.com) — or a local [Ollama](https://ollama.com) install
+- Your LLM service provider **API key** — or a local [Ollama](https://ollama.com) install
 - **Discord** (optional) — a bot application from the [Discord Developer Portal](https://discord.com/developers)
 - **Second Life or OpenSimulator** (optional) — an avatar account and the viewer of your choice
 - **A public HTTPS tunnel** (required for Second Life) — cloudflared is the default; ngrok, bore, or a VPS with nginx all work too
