@@ -56,17 +56,20 @@ A self-hosted AI companion that lives simultaneously in **Second Life** (or Open
 **Windows Powershell**
 
 1. **Clone**
+```powershell
 git clone https://github.com/pablo0713-glitch/trixxie-companion-agent.git
 cd trixxie-companion-agent
-
+```
 2. **Setup Virtual Environment**
+```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-
+```
 3. **Install & Run**
+```powershell
 pip install -r requirements.txt
 python main.py
-
+```
 
 **Companion Setup**
 
