@@ -940,8 +940,28 @@ async function bindStep7() {
   const section = document.getElementById('script-section');
   if (!section) return;
   try {
-    const res  = await fetch('/setup/scripts');
-    const data = await res.json();
+    let res  = await fetch('/setup/scripts');
+    let data = await res.json();
+
+    // Scripts are gitignored and only generated on agent startup.
+    // If missing but URL is known, generate them now so the user
+    // doesn't have to restart the agent first.
+    if (!data.lsl && !data.lua && state.sl_bridge_url) {
+      section.innerHTML = '<p class="text-dim" style="margin-top:0.5rem">Generating scripts…</p>';
+      await fetch('/setup/update-scripts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url:      state.sl_bridge_url,
+          secret:   state.sl_bridge_secret,
+          triggers: state.sl_trigger_names.filter(Boolean),
+          opensim:  state.opensim_enabled,
+        }),
+      });
+      res  = await fetch('/setup/scripts');
+      data = await res.json();
+    }
+
     let html = '';
 
     if (data.updated_on_startup) {
@@ -968,7 +988,7 @@ async function bindStep7() {
         </div>`;
     }
 
-    section.innerHTML = html || '<p class="text-dim">No scripts found — run the server to generate them.</p>';
+    section.innerHTML = html || '<p class="text-dim">Bridge URL not configured — go to Step 3 to set it up.</p>';
 
     for (const r of rows) {
       const copyBtn = document.getElementById(`btn-copy-${r.id}`);
