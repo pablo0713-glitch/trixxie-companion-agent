@@ -930,10 +930,9 @@ function buildStep7() {
       <code>./run.sh</code>
     </div>
 
-    ${state.sl_enabled ? `
     <div id="script-section" style="margin-top:2rem">
       <p class="text-dim" style="margin-top:0.5rem">Loading scripts…</p>
-    </div>` : ''}`;
+    </div>`;
 }
 
 async function bindStep7() {
