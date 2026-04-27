@@ -55,9 +55,16 @@ core/
                                  After each exchange: fire-and-forget _append_stm_entry()
                                  generates a 1–2 sentence summary and appends it to
                                  stm.json (rolling 10 entries) for cross-platform bridging.
-                                 Empty-turn guard: assistant turns with no content are
-                                 skipped before persistence (empty content is invalid for
-                                 the Anthropic API and causes model confusion).
+                                 History sanitization: _sanitize_history() strips two
+                                 classes of tail corruption before each call — dangling
+                                 tool-use cycles (assistant[tool_use] + user[tool_result]
+                                 with no final assistant turn) and accumulated unresponded
+                                 user messages (consecutive plain user turns saved during
+                                 prior empty responses). User turn is persisted only after
+                                 a successful non-empty reply, preventing accumulation.
+                                 Empty-response retry: _run_tool_loop() retries once when
+                                 stop_reason=end_turn but response text is empty, then
+                                 returns a fallback string if still empty.
 
   persona.py        Persona      Identity-file-based persona. _load_identity_files()
                                  reads data/identity/agent.md + soul.md + user.md
@@ -272,6 +279,17 @@ setup/
                                           Auto-triggers silently when the user clicks Next
                                           on Step 3 and SL is enabled, so scripts are always
                                           in sync without a manual button press.
+                                          Step 7 (Save): always renders a script section.
+                                          bindStep7() fetches GET /setup/scripts; if both
+                                          scripts are null but a bridge URL is in state,
+                                          auto-calls POST /setup/update-scripts to generate
+                                          them before rendering. Renders one row per script
+                                          (LSL + Lua) with Copy (clipboard) and Save
+                                          (browser download) buttons. Script content is
+                                          held in memory only — never placed in the DOM —
+                                          so credentials are not exposed in the page source
+                                          or browser inspector. If updated_on_startup is
+                                          true, a yellow warning banner is displayed.
 
 interfaces/
   setup_server.py                         FastAPI APIRouter for the setup wizard.
@@ -287,6 +305,16 @@ interfaces/
                                           lua/agent_companion.lua in-place using regex lambda
                                           substitution (avoids backreference issues with
                                           special chars in URLs and secrets).
+                                          GET /setup/scripts — returns lsl and lua script
+                                          content plus updated_on_startup flag (set when
+                                          patch_scripts_from_env() detected a structural
+                                          change in the template on startup).
+                                          patch_scripts_from_env() — called from main.py
+                                          on every startup; copies templates over output
+                                          files when force_template=True (always on startup);
+                                          _template_has_changed() compares normalized content
+                                          (credentials replaced with __) to detect structural
+                                          changes without credential noise.
 
   debug_server.py                         FastAPI APIRouter for live agent inspection.
                                           Accepts session_index: SessionIndex | None as a

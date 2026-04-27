@@ -200,6 +200,8 @@ Review and save. The wizard writes:
 
 Persona changes take effect immediately on the next message. Model and credential changes require restarting `run.sh`.
 
+If Second Life is configured, this step also shows **Copy** and **Save** buttons for the fully-patched LSL and Lua scripts (credentials already filled in). Use these to recover a lost HUD script or save the Lua file to a non-standard location without opening a terminal.
+
 </details>
 
 ---
@@ -461,6 +463,7 @@ companion-agent/
 - Verify `run.sh` is running and the bridge started on port 8080
 - The tunnel URL changes on every cloudflared restart — update the script and recompile when it does
 - Check that `SECRET` in the LSL script matches `SL_BRIDGE_SECRET` in `.env`
+- If you lost the HUD script, go to **Settings → Step 7** and use the Copy or Save button to recover the fully-patched LSL script
 
 **"My Outfit" scan says "RLV not ready":**
 - RLV must be enabled in your SL viewer (look for a RestrainedLove or RestrainedLife toggle in viewer settings)
