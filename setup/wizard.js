@@ -671,7 +671,17 @@ async function updateScripts(silent) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, secret, triggers, opensim }),
     });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (_) {
+      const text = await res.text().catch(() => '(no response body)');
+      if (statusEl && !silent) {
+        statusEl.textContent = `✗ Server returned HTTP ${res.status} — ${text.slice(0, 120)}`;
+        statusEl.style.color = '#f87171';
+      }
+      return;
+    }
     if (statusEl && !silent) {
       statusEl.textContent = data.ok ? '✓ Scripts updated' : '✗ ' + JSON.stringify(data.results);
       statusEl.style.color = data.ok ? '#4ade80' : '#f87171';
