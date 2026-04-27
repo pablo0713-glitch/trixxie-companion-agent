@@ -928,7 +928,67 @@ function buildStep7() {
     <div class="callout callout-info">
       Persona changes take effect immediately. Model, credentials, and platform changes require a restart:
       <code>./run.sh</code>
-    </div>`;
+    </div>
+
+    ${state.sl_enabled ? `
+    <div id="script-section" style="margin-top:2rem">
+      <p class="text-dim" style="margin-top:0.5rem">Loading scripts…</p>
+    </div>` : ''}`;
+}
+
+async function bindStep7() {
+  const section = document.getElementById('script-section');
+  if (!section) return;
+  try {
+    const res  = await fetch('/setup/scripts');
+    const data = await res.json();
+    let html = '';
+
+    if (data.updated_on_startup) {
+      html += `<div class="callout callout-warning" style="margin-top:0">
+        ⚠ Scripts were automatically updated from a newer template on startup.
+        Please recopy the LSL script to your HUD and replace the Lua file.
+      </div>`;
+    }
+
+    if (data.lsl) {
+      html += `
+        <div class="script-block">
+          <div class="script-header">
+            <span class="script-title">LSL Script — companion_bridge.lsl</span>
+            <button class="btn btn-ghost" onclick="copyScript('lsl-content', this)">Copy</button>
+          </div>
+          <p class="form-hint">Copy and paste into a new script inside your HUD object in Second Life.</p>
+          <pre id="lsl-content" class="script-pre">${esc(data.lsl)}</pre>
+        </div>`;
+    }
+
+    if (data.lua) {
+      html += `
+        <div class="script-block">
+          <div class="script-header">
+            <span class="script-title">Lua Script — agent_companion.lua</span>
+            <button class="btn btn-ghost" onclick="copyScript('lua-content', this)">Copy</button>
+          </div>
+          <p class="form-hint">Place at <code>user_settings/automation.lua</code> in your Cool VL Viewer directory.</p>
+          <pre id="lua-content" class="script-pre">${esc(data.lua)}</pre>
+        </div>`;
+    }
+
+    section.innerHTML = html || '<p class="text-dim">No scripts found — run the server to generate them.</p>';
+  } catch (e) {
+    section.innerHTML = '<p class="text-dim">Could not load scripts.</p>';
+  }
+}
+
+function copyScript(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
 }
 
 // ============================================================
@@ -939,7 +999,7 @@ const builders = {
   1: buildStep1, 2: buildStep2, 3: buildStep3,
   4: buildStep4, 5: buildStep5, 6: buildStep6, 7: buildStep7,
 };
-const binders = { 1: bindStep1, 3: () => updateScriptSnippet() };
+const binders = { 1: bindStep1, 3: () => updateScriptSnippet(), 7: bindStep7 };
 const collectors = {
   1: collectStep1, 2: collectStep2, 3: collectStep3,
   4: collectStep4, 5: collectStep5, 6: collectStep6,

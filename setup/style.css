@@ -606,6 +606,45 @@ label {
   color: #e2e8f0;
 }
 
+/* ── Script viewer ── */
+
+.script-block {
+  margin-top: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.script-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.script-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+}
+
+.script-pre {
+  margin: 0;
+  padding: 1rem;
+  background: rgba(0,0,0,0.35);
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: #e2e8f0;
+  max-height: 320px;
+  overflow-y: auto;
+  white-space: pre;
+  tab-size: 4;
+}
+
 /* ── Misc ── */
 
 .text-dim { color: var(--text-faint); font-size: 0.88rem; }

@@ -13,6 +13,8 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+_startup_script_updated: bool = False  # set True when startup finds a newer template
+
 _ROOT = Path(__file__).parent.parent
 _ENV_PATH = _ROOT / ".env"
 _CONFIG_PATH = _ROOT / "data" / "agent_config.json"
@@ -45,17 +47,51 @@ class _ScriptUpdateBody(BaseModel):
     opensim: bool = False
 
 
-def _patch_scripts(url: str, secret: str, grid: str, triggers: list[str]) -> dict[str, str]:
+def _normalize_creds(text: str) -> str:
+    """Replace all credential/config fields with a fixed placeholder for structural comparison."""
+    for pattern in (
+        r'(string\s+SERVER_URL\s*=\s*")[^"]*(")',
+        r'(string\s+SECRET\s*=\s*")[^"]*(")',
+        r'(string\s+GRID\s*=\s*")[^"]*(")',
+        r'(list\s+TRIGGER_NAMES\s*=\s*\[)[^\]]*(\])',
+        r'(local\s+SERVER_URL\s*=\s*")[^"]*(")',
+        r'(local\s+SECRET\s*=\s*")[^"]*(")',
+        r'(local\s+GRID\s*=\s*")[^"]*(")',
+    ):
+        text = re.sub(pattern, lambda m: m.group(1) + "__" + m.group(2), text)
+    return text
+
+
+def _template_has_changed(template_path: Path, output_path: Path) -> bool:
+    """True if the template has structural changes vs the current output file."""
+    if not output_path.exists():
+        return True
+    try:
+        return _normalize_creds(template_path.read_text(encoding="utf-8")) != \
+               _normalize_creds(output_path.read_text(encoding="utf-8"))
+    except OSError:
+        return True
+
+
+def _patch_scripts(url: str, secret: str, grid: str, triggers: list[str], force_template: bool = False) -> dict[str, str]:
     """Patch SERVER_URL / SECRET / GRID / TRIGGER_NAMES into the LSL and Lua scripts.
-    If the output file is absent, it is generated from the .template file first.
+
+    If force_template=True (used on startup), always copies the .template over the
+    output file first so git-pulled template changes are picked up automatically.
+    If force_template=False (wizard button), only copies when the output is absent.
+
+    Returns the results dict. Sets the module-level _startup_script_updated flag
+    when force_template=True and a structurally changed template is detected.
     """
+    global _startup_script_updated
     lsl_path = _ROOT / "lsl" / "companion_bridge.lsl"
     lua_path = _ROOT / "lua" / "agent_companion.lua"
     for path in (lsl_path, lua_path):
         template = path.with_suffix(path.suffix + ".template")
-        if not path.exists() and template.exists():
-            import shutil as _shutil
-            _shutil.copy(template, path)
+        if template.exists() and (force_template or not path.exists()):
+            if force_template and _template_has_changed(template, path):
+                _startup_script_updated = True
+            shutil.copy(template, path)
     triggers_lsl = ", ".join(f'"{t}"' for t in triggers if t)
     results: dict[str, str] = {}
 
@@ -107,7 +143,7 @@ def patch_scripts_from_env() -> None:
     grid = "opensim" if opensim else "sl"
     triggers_raw = env.get("SL_TRIGGER_NAMES", "")
     triggers = [t.strip() for t in triggers_raw.split(",") if t.strip()]
-    results = _patch_scripts(url, secret, grid, triggers)
+    results = _patch_scripts(url, secret, grid, triggers, force_template=True)
     logger.info("Script patch on startup: %s", results)
 
 
@@ -199,6 +235,16 @@ def create_setup_router() -> APIRouter:
         except Exception as exc:
             logger.exception("Setup config save failed: %s", exc)
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    @router.get("/setup/scripts")
+    async def get_scripts() -> JSONResponse:
+        lsl_path = _ROOT / "lsl" / "companion_bridge.lsl"
+        lua_path = _ROOT / "lua" / "agent_companion.lua"
+        return JSONResponse({
+            "lsl": lsl_path.read_text(encoding="utf-8") if lsl_path.exists() else None,
+            "lua": lua_path.read_text(encoding="utf-8") if lua_path.exists() else None,
+            "updated_on_startup": _startup_script_updated,
+        })
 
     @router.post("/setup/update-scripts")
     async def update_scripts(body: _ScriptUpdateBody) -> JSONResponse:
