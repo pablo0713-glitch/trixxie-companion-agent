@@ -36,6 +36,35 @@ MEMORY_CAP = 2000
 USER_CAP   = 1200
 
 
+def _sanitize_history(history: list) -> list:
+    """Strip dangling tool-use cycles from the tail of history.
+
+    A dangling cycle is an assistant turn containing tool_use blocks followed
+    by a user turn containing only tool_result blocks, with no final assistant
+    turn after it. Sending this to the API causes the model to return empty
+    content because it sees consecutive user messages (tool_result + new msg).
+    """
+    if not history:
+        return history
+    last = history[-1]
+    role = last.get("role") if isinstance(last, dict) else getattr(last, "role", None)
+    content = last.get("content") if isinstance(last, dict) else getattr(last, "content", None)
+    if role == "user" and isinstance(content, list) and content:
+        if any(
+            (b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_result"
+            for b in content
+        ):
+            trimmed = history[:-1]
+            if trimmed:
+                prev = trimmed[-1]
+                prev_role = prev.get("role") if isinstance(prev, dict) else getattr(prev, "role", None)
+                if prev_role == "assistant":
+                    trimmed = trimmed[:-1]
+            logger.warning("Stripped dangling tool-use cycle from history tail (%d → %d turns)", len(history), len(trimmed))
+            return trimmed
+    return history
+
+
 @dataclass
 class AgentResponse:
     text: str
@@ -113,7 +142,7 @@ class AgentCore:
             "block1_chars": len(system_blocks[1]["text"]) if len(system_blocks) > 1 else 0,
             "has_block1": len(system_blocks) > 1,
         }
-        messages = list(history) + [{"role": "user", "content": message}]
+        messages = _sanitize_history(list(history)) + [{"role": "user", "content": message}]
 
         await self._memory.append_turn(
             context.user_id, context.channel_id, context.platform, "user", message,
