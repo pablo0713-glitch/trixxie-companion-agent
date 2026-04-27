@@ -36,32 +36,61 @@ MEMORY_CAP = 2000
 USER_CAP   = 1200
 
 
-def _sanitize_history(history: list) -> list:
-    """Strip dangling tool-use cycles from the tail of history.
+def _get_role(turn: dict) -> str:
+    return turn.get("role") if isinstance(turn, dict) else getattr(turn, "role", "")
 
-    A dangling cycle is an assistant turn containing tool_use blocks followed
-    by a user turn containing only tool_result blocks, with no final assistant
-    turn after it. Sending this to the API causes the model to return empty
-    content because it sees consecutive user messages (tool_result + new msg).
+
+def _get_content(turn: dict):
+    return turn.get("content") if isinstance(turn, dict) else getattr(turn, "content", None)
+
+
+def _is_tool_result_turn(turn: dict) -> bool:
+    content = _get_content(turn)
+    return (
+        _get_role(turn) == "user"
+        and isinstance(content, list)
+        and bool(content)
+        and any(
+            (b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_result"
+            for b in content
+        )
+    )
+
+
+def _sanitize_history(history: list) -> list:
+    """Ensure history ends on an assistant turn so the model sees clean context.
+
+    Strips two classes of tail corruption:
+    1. Dangling tool-use cycle: assistant[tool_use] + user[tool_result] with no
+       following assistant turn. Caused by the model returning empty mid-loop.
+    2. Accumulated unresponded user messages: consecutive plain user turns saved
+       when every previous response returned a fallback. These pile up and cause
+       the model to keep returning empty (self-reinforcing loop).
+
+    History should always end with an assistant turn (or be empty). The caller
+    appends the new user message separately after sanitization.
     """
     if not history:
         return history
-    last = history[-1]
-    role = last.get("role") if isinstance(last, dict) else getattr(last, "role", None)
-    content = last.get("content") if isinstance(last, dict) else getattr(last, "content", None)
-    if role == "user" and isinstance(content, list) and content:
-        if any(
-            (b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_result"
-            for b in content
-        ):
-            trimmed = history[:-1]
-            if trimmed:
-                prev = trimmed[-1]
-                prev_role = prev.get("role") if isinstance(prev, dict) else getattr(prev, "role", None)
-                if prev_role == "assistant":
-                    trimmed = trimmed[:-1]
-            logger.warning("Stripped dangling tool-use cycle from history tail (%d → %d turns)", len(history), len(trimmed))
-            return trimmed
+
+    n_before = len(history)
+
+    # Pass 1 — strip a dangling tool-use cycle at the very tail
+    if _is_tool_result_turn(history[-1]):
+        history = history[:-1]
+        if history and _get_role(history[-1]) == "assistant":
+            history = history[:-1]
+
+    # Pass 2 — strip any remaining plain user turns at the tail
+    while history and _get_role(history[-1]) == "user" and not _is_tool_result_turn(history[-1]):
+        history = history[:-1]
+
+    if len(history) != n_before:
+        logger.warning(
+            "Sanitized history tail: %d → %d turns (stripped unresponded user messages)",
+            n_before, len(history),
+        )
+
     return history
 
 
@@ -144,11 +173,6 @@ class AgentCore:
         }
         messages = _sanitize_history(list(history)) + [{"role": "user", "content": message}]
 
-        await self._memory.append_turn(
-            context.user_id, context.channel_id, context.platform, "user", message,
-            context.display_name,
-        )
-
         sl_action_queue: list[dict] = []
         try:
             reply_text, assistant_turns = await self._run_tool_loop(
@@ -174,6 +198,13 @@ class AgentCore:
         if not reply_text:
             logger.warning("Empty reply_text for user %s — returning fallback", context.user_id)
             return AgentResponse(text="I lost that one — something cut me off mid-thought. Ask me again?")
+
+        # Save user turn only after a successful response — prevents accumulating
+        # unresponded user messages in history when the model returns empty.
+        await self._memory.append_turn(
+            context.user_id, context.channel_id, context.platform, "user", message,
+            context.display_name,
+        )
 
         for turn in assistant_turns:
             if not turn.get("content"):
