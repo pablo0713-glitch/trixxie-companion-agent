@@ -606,22 +606,21 @@ label {
   color: #e2e8f0;
 }
 
-/* ── Script viewer ── */
+/* ── Script download row ── */
 
-.script-block {
-  margin-top: 1.5rem;
+.script-row {
+  margin-top: 1.25rem;
+  padding: 0.75rem 1rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  overflow: hidden;
+  background: var(--surface);
 }
 
-.script-header {
+.script-row-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.6rem 1rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  gap: 1rem;
 }
 
 .script-title {
@@ -631,18 +630,10 @@ label {
   font-family: ui-monospace, 'Cascadia Code', monospace;
 }
 
-.script-pre {
-  margin: 0;
-  padding: 1rem;
-  background: rgba(0,0,0,0.35);
-  font-family: ui-monospace, 'Cascadia Code', monospace;
-  font-size: 0.78rem;
-  line-height: 1.5;
-  color: #e2e8f0;
-  max-height: 320px;
-  overflow-y: auto;
-  white-space: pre;
-  tab-size: 4;
+.script-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
 }
 
 /* ── Misc ── */

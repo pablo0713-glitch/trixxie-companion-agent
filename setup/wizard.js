@@ -218,7 +218,7 @@ function applyConfig(config) {
   if (env.DISCORD_ALLOWED_GUILD_IDS) state.discord_allowed_guild_ids = env.DISCORD_ALLOWED_GUILD_IDS;
   if (env.DISCORD_ACTIVE_CHANNEL_IDS) state.discord_active_channel_ids = env.DISCORD_ACTIVE_CHANNEL_IDS;
   if (env.SL_BRIDGE_SECRET) { state.sl_bridge_secret = env.SL_BRIDGE_SECRET; state.sl_enabled = true; }
-  if (env.SL_BRIDGE_URL)    state.sl_bridge_url    = env.SL_BRIDGE_URL;
+  if (env.SL_BRIDGE_URL)    { state.sl_bridge_url = env.SL_BRIDGE_URL; state.sl_enabled = true; }
   if (env.SL_BRIDGE_PORT)   state.sl_bridge_port   = env.SL_BRIDGE_PORT;
   if (env.SL_TRIGGER_NAMES) {
     const parts = env.SL_TRIGGER_NAMES.split(',').map(s => s.trim());
@@ -946,49 +946,53 @@ async function bindStep7() {
 
     if (data.updated_on_startup) {
       html += `<div class="callout callout-warning" style="margin-top:0">
-        ⚠ Scripts were automatically updated from a newer template on startup.
-        Please recopy the LSL script to your HUD and replace the Lua file.
+        ⚠ Scripts updated from a newer template on startup — recopy the LSL script to your HUD and replace the Lua file.
       </div>`;
     }
 
-    if (data.lsl) {
-      html += `
-        <div class="script-block">
-          <div class="script-header">
-            <span class="script-title">LSL Script — companion_bridge.lsl</span>
-            <button class="btn btn-ghost" onclick="copyScript('lsl-content', this)">Copy</button>
-          </div>
-          <p class="form-hint">Copy and paste into a new script inside your HUD object in Second Life.</p>
-          <pre id="lsl-content" class="script-pre">${esc(data.lsl)}</pre>
-        </div>`;
-    }
+    const rows = [];
+    if (data.lsl) rows.push({ id: 'lsl', title: 'companion_bridge.lsl', hint: 'Paste into a new script inside your HUD object in Second Life.', content: data.lsl });
+    if (data.lua) rows.push({ id: 'lua', title: 'agent_companion.lua',  hint: 'Place at <code>user_settings/automation.lua</code> in your Cool VL Viewer directory.', content: data.lua });
 
-    if (data.lua) {
+    for (const r of rows) {
       html += `
-        <div class="script-block">
-          <div class="script-header">
-            <span class="script-title">Lua Script — agent_companion.lua</span>
-            <button class="btn btn-ghost" onclick="copyScript('lua-content', this)">Copy</button>
+        <div class="script-row">
+          <div class="script-row-header">
+            <span class="script-title">${r.title}</span>
+            <div class="script-actions">
+              <button class="btn btn-ghost" id="btn-copy-${r.id}">Copy</button>
+              <button class="btn btn-ghost" id="btn-save-${r.id}">Save</button>
+            </div>
           </div>
-          <p class="form-hint">Place at <code>user_settings/automation.lua</code> in your Cool VL Viewer directory.</p>
-          <pre id="lua-content" class="script-pre">${esc(data.lua)}</pre>
+          <p class="form-hint" style="margin:0.35rem 0 0">${r.hint}</p>
         </div>`;
     }
 
     section.innerHTML = html || '<p class="text-dim">No scripts found — run the server to generate them.</p>';
+
+    for (const r of rows) {
+      const copyBtn = document.getElementById(`btn-copy-${r.id}`);
+      if (copyBtn) copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(r.content).then(() => {
+          const orig = copyBtn.textContent;
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = orig; }, 1500);
+        });
+      });
+      const saveBtn = document.getElementById(`btn-save-${r.id}`);
+      if (saveBtn) saveBtn.addEventListener('click', () => _downloadScript(r.title, r.content));
+    }
   } catch (e) {
     section.innerHTML = '<p class="text-dim">Could not load scripts.</p>';
   }
 }
 
-function copyScript(id, btn) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  navigator.clipboard.writeText(el.textContent).then(() => {
-    const orig = btn.textContent;
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = orig; }, 1500);
-  });
+function _downloadScript(filename, content) {
+  const blob = new Blob([content], { type: 'text/plain' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ============================================================
