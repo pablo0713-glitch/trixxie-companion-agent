@@ -97,6 +97,12 @@ class AnthropicAdapter(ModelAdapter):
                 tool_calls.append(ToolCall(id=bid, name=bname, input=binput))
                 history_content.append({"type": "tool_use", "id": bid, "name": bname, "input": binput})
 
+        if not text_parts and not tool_calls:
+            logger.debug(
+                "No text or tool_use in response.content (len=%d, stop=%s): %r",
+                len(response.content), response.stop_reason, response.content,
+            )
+
         raw_stop = response.stop_reason
         if raw_stop == "max_tokens":
             logger.warning("max_tokens hit — text=%d chars, tool_calls=%d", len("".join(text_parts)), len(tool_calls))

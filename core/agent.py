@@ -272,6 +272,7 @@ class AgentCore:
     ) -> tuple[str, list[dict]]:
         tool_definitions = self._tools.get_definitions(context)
         accumulated_turns: list[dict] = []
+        empty_retried = False
 
         for round_num in range(MAX_TOOL_ROUNDS + 1):
             tool_choice: dict = {"type": "none"} if round_num == MAX_TOOL_ROUNDS else {"type": "auto"}
@@ -289,8 +290,17 @@ class AgentCore:
             messages = messages + [assistant_turn]
 
             if response.stop_reason in ("end_turn", "max_tokens"):
+                if not response.text and not empty_retried:
+                    logger.warning(
+                        "Empty text at stop_reason=%s for user %s — retrying",
+                        response.stop_reason, context.user_id,
+                    )
+                    empty_retried = True
+                    accumulated_turns.pop()
+                    messages = messages[:-1]
+                    continue
                 if not response.text:
-                    logger.warning("Empty text at stop_reason=%s for user %s", response.stop_reason, context.user_id)
+                    logger.warning("Still empty after retry for user %s", context.user_id)
                 return response.text, accumulated_turns
 
             if response.stop_reason == "tool_use":
